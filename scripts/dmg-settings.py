@@ -21,4 +21,4 @@ show_pathbar = False
 show_tab_view = False
 icon_size = 112
 text_size = 15
-icon_locations = {"Hola.app": (180, 210), "Applications": (580, 210)}
+icon_locations = {"Hola.app": (180, 440), "Applications": (580, 440)}

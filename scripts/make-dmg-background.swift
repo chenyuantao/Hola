@@ -8,7 +8,9 @@ guard CommandLine.arguments.count == 2 else {
 
 let width = 760
 let height = 560
-let scale = 2
+// Finder uses the PNG's pixel dimensions as window coordinates. A 2x bitmap
+// makes the artwork twice as large and crops its lower half in this window.
+let scale = 1
 guard let bitmap = NSBitmapImageRep(
     bitmapDataPlanes: nil,
     pixelsWide: width * scale,
@@ -68,32 +70,32 @@ let arrow = NSBezierPath()
 arrow.lineWidth = 5
 arrow.lineCapStyle = .round
 arrow.lineJoinStyle = .round
-arrow.move(to: NSPoint(x: 323, y: 350))
-arrow.line(to: NSPoint(x: 430, y: 350))
-arrow.move(to: NSPoint(x: 418, y: 362))
-arrow.line(to: NSPoint(x: 430, y: 350))
-arrow.line(to: NSPoint(x: 418, y: 338))
+arrow.move(to: NSPoint(x: 323, y: 110))
+arrow.line(to: NSPoint(x: 430, y: 110))
+arrow.move(to: NSPoint(x: 418, y: 122))
+arrow.line(to: NSPoint(x: 430, y: 110))
+arrow.line(to: NSPoint(x: 418, y: 98))
 color(0x5C977A).setStroke()
 arrow.stroke()
 
-rounded(NSRect(x: 26, y: 28, width: 708, height: 240), radius: 16,
+rounded(NSRect(x: 26, y: 185, width: 708, height: 230), radius: 16,
         fill: color(0xE7EFE8))
-label("首次打开 · First launch", x: 48, top: 309, size: 17,
+label("首次打开 · First launch", x: 48, top: 159, size: 17,
       ink: color(0x245442), weight: .semibold)
 label("从「应用程序」打开 Hola。如果 macOS 阻止打开，先关闭提示，再前往：",
-      x: 48, top: 341, size: 14, ink: color(0x24382F))
+      x: 48, top: 190, size: 14, ink: color(0x24382F))
 label("Open Hola from Applications. If macOS blocks it, dismiss the alert and go to:",
-      x: 48, top: 365, size: 12, ink: color(0x60766B))
+      x: 48, top: 213, size: 12, ink: color(0x60766B))
 label("macOS 13+   系统设置 → 隐私与安全性 → 安全性 → 仍要打开",
-      x: 48, top: 402, size: 14, ink: color(0x24382F), weight: .medium)
+      x: 48, top: 247, size: 14, ink: color(0x24382F), weight: .medium)
 label("macOS 12     系统偏好设置 → 安全性与隐私 → 通用 → 仍要打开",
-      x: 48, top: 432, size: 14, ink: color(0x24382F), weight: .medium)
+      x: 48, top: 277, size: 14, ink: color(0x24382F), weight: .medium)
 label("13+: System Settings → Privacy & Security → Security → Open Anyway",
-      x: 48, top: 463, size: 11, ink: color(0x60766B))
+      x: 48, top: 310, size: 11, ink: color(0x60766B))
 label("12: System Preferences → Security & Privacy → General → Open Anyway",
-      x: 48, top: 481, size: 11, ink: color(0x60766B))
+      x: 48, top: 328, size: 11, ink: color(0x60766B))
 label("请先确认下载来源为 Hola 官方 Releases。若看不到按钮，请先尝试打开一次。",
-      x: 48, top: 505, size: 12, ink: color(0x60766B))
+      x: 48, top: 347, size: 12, ink: color(0x60766B))
 
 NSGraphicsContext.restoreGraphicsState()
 guard let png = bitmap.representation(using: .png, properties: [:]) else {
