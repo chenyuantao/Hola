@@ -183,6 +183,23 @@ async (input) => {
 
 `interrupt: true` 会拦截本次回车；有非空 `replacement` 时写回草稿，确认后再次按回车发送。`interrupt: false` 会继续原有润色流程，并忽略 `replacement`。脚本失败或替换失败时不会发送。指令只在已选择目标应用的输入框中执行。
 
+规则按从上到下的顺序匹配，拖动左侧手柄可以调整优先级。输入草稿后点击 **测试**：命中时打印脚本返回值；没有任何规则命中时显示「未命中」。测试使用当前编辑中的规则，不必先保存。
+
+发起网络请求使用 `fetch`，用法与 [Fetch 标准](https://fetch.spec.whatwg.org/) 一致。脚本里可以直接 `await fetch(url, init)`，同时提供 `Headers`、`Request`、`Response`、`AbortController`、`FormData`、`Blob` 和 `URLSearchParams`。HTTP 4xx/5xx 不会让 Promise 失败，先看 `response.ok`；URL 不合法、连不上或完整性校验失败会以 `TypeError` 拒绝，用 `AbortSignal` 中止时以 `AbortError` 或 `TimeoutError` 拒绝。整段脚本（包括 `fetch`）需要在 10 秒内返回，超时不会发送。
+
+```javascript
+async (input) => {
+  const response = await fetch("https://example.com/rewrite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: input }),
+  });
+  if (!response.ok) throw new Error(String(response.status));
+  const data = await response.json();
+  return { interrupt: true, replacement: data.text };
+}
+```
+
 设置面板支持 **导出 / 导入**，可迁移目标应用列表、模型配置和指令。导入会替换文件中对应的设置；导出文件包含接口 Token 和指令脚本，请妥善保存。
 
 ## 兼容性与数据

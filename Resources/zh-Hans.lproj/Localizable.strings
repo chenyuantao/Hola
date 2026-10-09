@@ -9,9 +9,14 @@
 "配置文件不是 JSON 对象" = "配置文件不是 JSON 对象";
 "基本设置" = "基本设置";
 "指令配置" = "指令配置";
-"按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。" = "按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。";
+"按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。" = "按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。";
 "指令脚本必须是函数，例如 (input) => ({ interrupt: false })" = "指令脚本必须是函数，例如 (input) => ({ interrupt: false })";
 "添加指令" = "添加指令";
+"输入要测试的草稿" = "输入要测试的草稿";
+"测试" = "测试";
+"返回值" = "返回值";
+"未命中" = "未命中";
+"拖动调整优先级" = "拖动调整优先级";
 "正则表达式，例如 ^#" = "正则表达式，例如 ^#";
 "删除" = "删除";
 "指令配置格式无效" = "指令配置格式无效";

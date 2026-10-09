@@ -28,8 +28,28 @@ func encodeCommands(_ rules: [CommandRule]) -> String {
 func matchingCommand(_ input: String, rules: [CommandRule]) -> CommandRule? {
     let range = NSRange(input.startIndex..<input.endIndex, in: input)
     return rules.first { rule in
-        (try? NSRegularExpression(pattern: rule.pattern).firstMatch(in: input, range: range)) != nil
+        guard !rule.pattern.isEmpty, let expression = try? NSRegularExpression(pattern: rule.pattern) else { return false }
+        return expression.firstMatch(in: input, range: range) != nil
     }
+}
+
+func reorder<T>(_ items: inout [T], from: Int, to: Int) {
+    guard from != to, items.indices.contains(from), items.indices.contains(to) else { return }
+    let item = items.remove(at: from)
+    items.insert(item, at: to)
+}
+
+func formatCommandResult(_ result: CommandResult) -> String {
+    guard let replacement = result.replacement else { return "{ interrupt: \(result.interrupt) }" }
+    return "{ interrupt: \(result.interrupt), replacement: \(quotedJSONString(replacement)) }"
+}
+
+private func quotedJSONString(_ value: String) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+          var text = String(data: data, encoding: .utf8), text.count >= 2 else { return "\"\"" }
+    text.removeFirst()
+    text.removeLast()
+    return text
 }
 
 struct CommandResult {
@@ -38,22 +58,29 @@ struct CommandResult {
 }
 
 // 每次运行独立的 JSContext。脚本是一个函数表达式，以 input 调用，可返回结果对象或 Promise。
+// 全局注入 fetch（URLSession）。同一条串行队列访问 JSContext，避免和网络回调并发。
 final class CommandRunner {
+    private let queue = DispatchQueue(label: "local.hola.command", qos: .userInitiated)
     private var context: JSContext?
+    private var fetchBridge: CommandFetchBridge?
     private var completed = false
     private let completion: (Result<CommandResult, ProbeError>) -> Void
 
     init(script: String, input: String, completion: @escaping (Result<CommandResult, ProbeError>) -> Void) {
         self.completion = completion
+        let bridge = CommandFetchBridge(queue: queue)
+        fetchBridge = bridge
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             self?.finish(.failure(ProbeError(L("指令执行超时"))))
         }
-        DispatchQueue.global(qos: .userInitiated).async { [self] in
+        queue.async { [self] in
             let context = JSContext()!
             self.context = context
             context.exceptionHandler = { [weak self] _, exception in
                 if let exception = exception { self?.finish(.failure(ProbeError(exception.toString()))) }
             }
+            bridge.install(into: context)
+            guard context.exception == nil else { return }
             var source = script.trimmingCharacters(in: .whitespacesAndNewlines)
             while source.hasSuffix(";") { source = String(source.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines) }
             guard let function = context.evaluateScript("(\n" + source + "\n)"), context.exception == nil else { return }
@@ -87,7 +114,9 @@ final class CommandRunner {
         DispatchQueue.main.async { [self] in
             guard !completed else { return }
             completed = true
+            fetchBridge?.invalidate()
             completion(result)
+            fetchBridge = nil
             context = nil
         }
     }

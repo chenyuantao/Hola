@@ -182,6 +182,23 @@ async (input) => {
 
 `interrupt: true` blocks this Return and inserts a nonempty `replacement` when provided. Press Return again to send the inserted draft. `interrupt: false` continues the normal polishing flow and ignores `replacement`. Script or replacement failures do not send the draft. Commands run only in selected target apps.
 
+Rules match from top to bottom. Drag the handle on the left to change priority. Enter a draft and click **Test** to print the script result, or **No match** when nothing matches. The test uses the rules currently being edited, without saving first.
+
+Use `fetch` for network requests. It follows the [Fetch standard](https://fetch.spec.whatwg.org/). Scripts can `await fetch(url, init)`. `Headers`, `Request`, `Response`, `AbortController`, `FormData`, `Blob`, and `URLSearchParams` are also available. HTTP 4xx/5xx responses do not reject the promise; check `response.ok`. An invalid URL, a connection failure, or an integrity mismatch rejects with `TypeError`. Aborting through `AbortSignal` rejects with `AbortError` or `TimeoutError`. The whole script, including `fetch`, must finish within 10 seconds; a timeout does not send the draft.
+
+```javascript
+async (input) => {
+  const response = await fetch("https://example.com/rewrite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: input }),
+  });
+  if (!response.ok) throw new Error(String(response.status));
+  const data = await response.json();
+  return { interrupt: true, replacement: data.text };
+}
+```
+
 Use **Export / Import** in Settings to transfer your target app list, model configuration, and commands. Import replaces the corresponding settings present in the file. Exported files contain API tokens and command scripts; keep them private.
 
 ## Compatibility and data

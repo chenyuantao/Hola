@@ -60,7 +60,7 @@ struct LocalizationTests {
                      == "Polishing (Jev 95%)…")
         precondition(en.text("unknown.key") == "unknown.key")
         // Every call site must have a resource entry, including nested messages.
-        let source = try ["Sources/main.swift", "Sources/Settings.swift", "Sources/Commands.swift"].map {
+        let source = try ["Sources/main.swift", "Sources/Settings.swift", "Sources/Commands.swift", "Sources/CommandFetch.swift"].map {
             try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8)
         }.joined(separator: "\n")
         let calls = try NSRegularExpression(pattern: #"\bL\(("(?:\\.|[^"\\])*")"#)

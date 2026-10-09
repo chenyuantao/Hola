@@ -97,6 +97,48 @@ let defaultJevModel = "jev-latest"
 var defaultJevPrompt: String { L("这段即将发送的草稿是否需要润色？语气生硬、表达不通顺、有明显口误或错别字算需要；已经通顺得体，或只是很短的确认，算不需要。") }
 var defaultOAPrompt: String { L("你是文字润色助手。保持原文语言，在不改变原意、不添加新信息的前提下，让这段话更通顺、得体。只输出润色后的文本本身，不要加引号或任何解释。") }
 
+private final class CommandDragHandle: NSView {
+    var onMove: ((CGFloat) -> Void)?
+    var onFinish: (() -> Void)?
+    private var dragging = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        toolTip = L("拖动调整优先级")
+    }
+    required init?(coder: NSCoder) { nil }
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand)
+    }
+    override func mouseDown(with event: NSEvent) {
+        dragging = true
+        window?.invalidateCursorRects(for: self)
+        NSCursor.closedHand.set()
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return }
+        onMove?(event.locationInWindow.y)
+    }
+    override func mouseUp(with event: NSEvent) {
+        dragging = false
+        NSCursor.openHand.set()
+        window?.invalidateCursorRects(for: self)
+        onFinish?()
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.tertiaryLabelColor.setFill()
+        let dot: CGFloat = 2
+        let gap: CGFloat = 3
+        let origin = NSPoint(x: (bounds.width - dot * 2 - gap) / 2, y: (bounds.height - dot * 3 - gap * 2) / 2)
+        for row in 0..<3 {
+            for column in 0..<2 {
+                let rect = NSRect(x: origin.x + CGFloat(column) * (dot + gap), y: origin.y + CGFloat(row) * (dot + gap), width: dot, height: dot)
+                NSBezierPath(ovalIn: rect).fill()
+            }
+        }
+    }
+}
+
 // 目标应用、Jev、OpenAI 的配置集中在一个面板里填写。
 final class SettingsController: NSObject {
     private struct Spec {
@@ -141,6 +183,11 @@ final class SettingsController: NSObject {
     private var displayedLanguage = setting(LanguagePreference.key, "system")
     private var commandRows = NSStackView()
     private var commandFields: [(pattern: NSTextField, script: NSTextView)] = []
+    private var commandTestInput: NSTextField?
+    private var commandTestResult: NSTextView?
+    private var commandTestButton: NSButton?
+    private var commandTestRunner: CommandRunner?
+    private var commandTestToken: UUID?
     private var tabView: NSTabView?
 
     func show(commandsTab: Bool = false) {
@@ -289,7 +336,8 @@ final class SettingsController: NSObject {
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        fill(makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。")), in: stack)
+        fill(makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。")), in: stack)
+        fill(makeCommandTest(), in: stack)
         commandRows = NSStackView()
         commandRows.orientation = .vertical
         commandRows.alignment = .leading
@@ -319,12 +367,108 @@ final class SettingsController: NSObject {
         return scroll
     }
 
+    private func makeCommandTest() -> NSView {
+        let group = NSStackView()
+        group.orientation = .vertical
+        group.alignment = .leading
+        group.spacing = 6
+        let field = NSTextField()
+        field.placeholderString = L("输入要测试的草稿")
+        field.font = .systemFont(ofSize: 13)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        commandTestInput = field
+        let button = NSButton(title: L("测试"), target: self, action: #selector(testCommand))
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        commandTestButton = button
+        let controls = NSStackView(views: [field, button])
+        controls.orientation = .horizontal
+        controls.distribution = .fill
+        controls.alignment = .centerY
+        controls.spacing = 8
+        let resultLabel = NSTextField(labelWithString: L("返回值"))
+        resultLabel.font = .systemFont(ofSize: 12)
+        resultLabel.textColor = .secondaryLabelColor
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let result = NSTextView()
+        result.isEditable = false
+        result.isSelectable = true
+        result.isRichText = false
+        result.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        result.isVerticallyResizable = true
+        result.isHorizontallyResizable = false
+        result.autoresizingMask = [.width]
+        result.textContainer?.widthTracksTextView = true
+        result.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        result.textContainerInset = NSSize(width: 4, height: 4)
+        scroll.documentView = result
+        commandTestResult = result
+        group.addArrangedSubview(controls)
+        group.addArrangedSubview(resultLabel)
+        group.addArrangedSubview(scroll)
+        for view in [controls, scroll] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: group.widthAnchor).isActive = true
+        }
+        scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        return group
+    }
+    @objc private func testCommand() {
+        window?.makeFirstResponder(nil)
+        let input = commandTestInput?.stringValue ?? ""
+        let rules = commandFields.map { CommandRule(pattern: $0.pattern.stringValue, script: $0.script.string) }
+        guard let rule = matchingCommand(input, rules: rules) else {
+            showCommandTestResult(L("未命中"))
+            return
+        }
+        let token = UUID()
+        commandTestToken = token
+        commandTestButton?.isEnabled = false
+        showCommandTestResult(L("执行指令中…"))
+        commandTestRunner = CommandRunner(script: rule.script, input: input) { [weak self] result in
+            guard let self, self.commandTestToken == token else { return }
+            self.commandTestRunner = nil
+            self.commandTestButton?.isEnabled = true
+            switch result {
+            case .success(let value):
+                self.showCommandTestResult(formatCommandResult(value))
+            case .failure(let error):
+                self.showCommandTestResult(error.description)
+            }
+        }
+    }
+    private func showCommandTestResult(_ text: String) {
+        commandTestResult?.string = text
+    }
     @objc private func addCommand() { appendCommand(CommandRule(pattern: "^#", script: "async (input) => {\n  return { interrupt: true, replacement: input.slice(1) };\n}")) }
     private func appendCommand(_ rule: CommandRule) {
         let row = NSStackView()
         row.orientation = .vertical
         row.alignment = .leading
         row.spacing = 5
+        let handle = CommandDragHandle()
+        handle.onMove = { [weak self, weak row] windowY in
+            guard let self, let row else { return }
+            row.alphaValue = 0.55
+            let y = self.commandRows.convert(NSPoint(x: 0, y: windowY), from: nil).y
+            self.dragCommand(row, toY: y)
+        }
+        handle.onFinish = { [weak row] in row?.alphaValue = 1 }
+        let priority = NSTextField(labelWithString: "")
+        priority.tag = 8701
+        priority.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        priority.textColor = .secondaryLabelColor
+        priority.alignment = .right
+        let spacer = NSView()
+        let remove = NSButton(title: L("删除"), target: self, action: #selector(removeCommand(_:)))
+        let header = NSStackView(views: [handle, priority, spacer, remove])
+        header.orientation = .horizontal
+        header.distribution = .fill
+        header.alignment = .centerY
+        header.spacing = 6
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let pattern = NSTextField(string: rule.pattern)
         pattern.placeholderString = L("正则表达式，例如 ^#")
         let script = NSTextView()
@@ -340,26 +484,74 @@ final class SettingsController: NSObject {
         scriptScroll.hasVerticalScroller = true
         scriptScroll.borderType = .bezelBorder
         scriptScroll.documentView = script
-        let remove = NSButton(title: L("删除"), target: self, action: #selector(removeCommand(_:)))
+        row.addArrangedSubview(header)
         row.addArrangedSubview(pattern)
         row.addArrangedSubview(scriptScroll)
-        row.addArrangedSubview(remove)
-        for view in [pattern, scriptScroll] {
+        for view in [header, pattern, scriptScroll] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
         }
+        handle.translatesAutoresizingMaskIntoConstraints = false
+        handle.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        handle.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        priority.translatesAutoresizingMaskIntoConstraints = false
+        priority.widthAnchor.constraint(equalToConstant: 28).isActive = true
         scriptScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
         commandRows.addArrangedSubview(row)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalTo: commandRows.widthAnchor).isActive = true
         commandFields.append((pattern, script))
+        updatePriorityLabels()
+    }
+    private func dragCommand(_ row: NSView, toY y: CGFloat) {
+        var steps = 0
+        while steps < commandRows.arrangedSubviews.count {
+            steps += 1
+            let rows = commandRows.arrangedSubviews
+            guard let from = rows.firstIndex(of: row) else { return }
+            if from > 0, y > rows[from - 1].frame.midY {
+                moveCommand(from: from, to: from - 1)
+                commandRows.layoutSubtreeIfNeeded()
+                continue
+            }
+            if from + 1 < rows.count, y < rows[from + 1].frame.midY {
+                moveCommand(from: from, to: from + 1)
+                commandRows.layoutSubtreeIfNeeded()
+                continue
+            }
+            return
+        }
+    }
+    private func moveCommand(from: Int, to: Int) {
+        guard from != to,
+              commandRows.arrangedSubviews.indices.contains(from),
+              commandRows.arrangedSubviews.indices.contains(to) else { return }
+        let row = commandRows.arrangedSubviews[from]
+        commandRows.removeArrangedSubview(row)
+        commandRows.insertArrangedSubview(row, at: to)
+        reorder(&commandFields, from: from, to: to)
+        updatePriorityLabels()
+    }
+    private func updatePriorityLabels() {
+        for (index, row) in commandRows.arrangedSubviews.enumerated() {
+            (row.viewWithTag(8701) as? NSTextField)?.stringValue = "\(index + 1)"
+        }
     }
     @objc private func removeCommand(_ sender: NSButton) {
-        guard let row = sender.superview as? NSStackView,
+        guard let row = commandRow(containing: sender),
               let index = commandRows.arrangedSubviews.firstIndex(of: row) else { return }
         commandRows.removeArrangedSubview(row)
         row.removeFromSuperview()
         commandFields.remove(at: index)
+        updatePriorityLabels()
+    }
+    private func commandRow(containing view: NSView) -> NSView? {
+        var current: NSView? = view
+        while let candidate = current, candidate !== commandRows {
+            if commandRows.arrangedSubviews.contains(candidate) { return candidate }
+            current = candidate.superview
+        }
+        return nil
     }
     private func currentCommands() throws -> [CommandRule] {
         let rules = commandFields.map { CommandRule(pattern: $0.pattern.stringValue, script: $0.script.string) }
@@ -457,6 +649,9 @@ final class SettingsController: NSObject {
         targetApplications = configuredTargets()
         renderTargets()
         jevCheckbox?.state = jevEnabled() ? .on : .off
+        commandTestToken = nil
+        commandTestRunner = nil
+        commandTestButton?.isEnabled = true
         for row in commandRows.arrangedSubviews { commandRows.removeArrangedSubview(row); row.removeFromSuperview() }
         commandFields.removeAll()
         for rule in (try? decodeCommands(setting(SettingKey.commands, "[]"))) ?? [] { appendCommand(rule) }
