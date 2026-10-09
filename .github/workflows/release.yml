@@ -51,6 +51,7 @@ jobs:
 
       - name: Import persistent self-signed certificate
         if: steps.existing.outputs.published != 'true'
+        timeout-minutes: 2
         env:
           CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
