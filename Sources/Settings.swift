@@ -6,7 +6,6 @@ struct ProbeError: Error, CustomStringConvertible {
 }
 // 配置项保存在 UserDefaults；导出配置时会包含接口 Token。
 enum SettingKey {
-    static let resumeRunning = "resumeRunning"
     static let targets = "targetApplications"
     static let jevEnabled = "jevEnabled"
     static let jevURL = "jevURL"
@@ -18,6 +17,7 @@ enum SettingKey {
     static let oaModel = "openAIModel"
     static let oaPrompt = "openAIPrompt"
     static let oaExtraParameters = "openAIExtraParameters"
+    static let commands = "commands"
 }
 func setting(_ key: String, _ fallback: String = "") -> String {
     let v = UserDefaults.standard.string(forKey: key) ?? ""
@@ -29,7 +29,8 @@ private let settingsFileKind = "hola-settings"
 private let settingsFileVersion = 1
 private let portableSettingKeys = [
     LanguagePreference.key, SettingKey.targets, SettingKey.jevEnabled, SettingKey.jevURL, SettingKey.jevToken, SettingKey.jevModel, SettingKey.jevPrompt,
-    SettingKey.oaURL, SettingKey.oaToken, SettingKey.oaModel, SettingKey.oaPrompt, SettingKey.oaExtraParameters
+    SettingKey.oaURL, SettingKey.oaToken, SettingKey.oaModel, SettingKey.oaPrompt, SettingKey.oaExtraParameters,
+    SettingKey.commands
 ]
 
 func extraRequestParameters(_ raw: String) throws -> [String: Any] {
@@ -68,9 +69,21 @@ func chatCompletionBody(model: String, system: String, user: String, extraParame
     return body
 }
 
-// 旧标识仅用于升级兼容；所有新配置与历史均使用 Hola 标识。
+// 发布版保留旧品牌迁移；开发版首次复制现有配置，之后独立保存。
 func migrateLegacyData() {
     let defaults = UserDefaults.standard
+    if Bundle.main.bundleIdentifier == "local.holadev" {
+        let marker = "holaDevSettingsMigrated"
+        if !defaults.bool(forKey: marker) {
+            let existing = defaults.persistentDomain(forName: "local.holadev") ?? [:]
+            let source = defaults.persistentDomain(forName: "local.hola") ?? [:]
+            for key in portableSettingKeys where existing[key] == nil {
+                if let value = source[key] { defaults.set(value, forKey: key) }
+            }
+            defaults.set(true, forKey: marker)
+        }
+        return
+    }
     let marker = "holaLegacySettingsMigrated"
     if !defaults.bool(forKey: marker) {
         let existing = defaults.persistentDomain(forName: "local.hola") ?? [:]
@@ -117,7 +130,7 @@ func decodeSettingsFile(_ data: Data) throws -> [String: String] {
     guard let settings = root["settings"] as? [String: Any] else {
         throw ProbeError(L("配置文件缺少 settings"))
     }
-    for key in [SettingKey.targets, LanguagePreference.key] where settings[key] != nil {
+    for key in [SettingKey.targets, LanguagePreference.key, SettingKey.commands] where settings[key] != nil {
         guard settings[key] is String else {
             throw ProbeError(L("配置文件中的设置格式无效"))
         }
@@ -141,6 +154,7 @@ func decodeSettingsFile(_ data: Data) throws -> [String: String] {
     if let raw = values[SettingKey.oaExtraParameters] {
         _ = try extraRequestParameters(raw)
     }
+    if let raw = values[SettingKey.commands] { _ = try decodeCommands(raw) }
     return values
 }
 

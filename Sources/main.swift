@@ -139,10 +139,14 @@ final class SettingsController: NSObject {
     private var loginCheckbox: NSButton?
     private var languagePicker: NSPopUpButton?
     private var displayedLanguage = setting(LanguagePreference.key, "system")
+    private var commandRows = NSStackView()
+    private var commandFields: [(pattern: NSTextField, script: NSTextView)] = []
+    private var tabView: NSTabView?
 
-    func show() {
+    func show(commandsTab: Bool = false) {
         if window == nil { window = makeWindow() }
         if window?.isVisible != true { loadValues() }
+        if commandsTab { tabView?.selectTabViewItem(withIdentifier: "commands") }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -166,7 +170,6 @@ final class SettingsController: NSObject {
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -243,15 +246,27 @@ final class SettingsController: NSObject {
         buttons.spacing = 8
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        content.addSubview(scroll)
+        let tabs = NSTabView()
+        tabView = tabs
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        let generalTab = NSTabViewItem(identifier: "general")
+        generalTab.label = L("基本设置")
+        generalTab.view = scroll
+        tabs.addTabViewItem(generalTab)
+        let commandTab = NSTabViewItem(identifier: "commands")
+        commandTab.label = L("指令配置")
+        commandTab.view = makeCommandsView()
+        tabs.addTabViewItem(commandTab)
+
+        content.addSubview(tabs)
         content.addSubview(line)
         content.addSubview(fileButtons)
         content.addSubview(buttons)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            line.topAnchor.constraint(equalTo: scroll.bottomAnchor),
+            tabs.topAnchor.constraint(equalTo: content.topAnchor),
+            tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            line.topAnchor.constraint(equalTo: tabs.bottomAnchor),
             line.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             line.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             fileButtons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
@@ -263,6 +278,93 @@ final class SettingsController: NSObject {
         window.contentView = content
         window.center()
         return window
+    }
+
+    private func makeCommandsView() -> NSView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        fill(makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。")), in: stack)
+        commandRows = NSStackView()
+        commandRows.orientation = .vertical
+        commandRows.alignment = .leading
+        commandRows.spacing = 12
+        fill(commandRows, in: stack)
+        let add = NSButton(title: L("添加指令"), target: self, action: #selector(addCommand))
+        fill(add, in: stack)
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16)
+        ])
+        scroll.documentView = container
+        let clip = scroll.contentView
+        let bottom = container.bottomAnchor.constraint(equalTo: clip.bottomAnchor)
+        bottom.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            container.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+            container.topAnchor.constraint(equalTo: clip.topAnchor),
+            container.widthAnchor.constraint(equalTo: clip.widthAnchor), bottom
+        ])
+        return scroll
+    }
+
+    @objc private func addCommand() { appendCommand(CommandRule(pattern: "^#", script: "async (input) => {\n  return { interrupt: true, replacement: input.slice(1) };\n}")) }
+    private func appendCommand(_ rule: CommandRule) {
+        let row = NSStackView()
+        row.orientation = .vertical
+        row.alignment = .leading
+        row.spacing = 5
+        let pattern = NSTextField(string: rule.pattern)
+        pattern.placeholderString = L("正则表达式，例如 ^#")
+        let script = NSTextView()
+        script.isRichText = false
+        script.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        script.isVerticallyResizable = true
+        script.isHorizontallyResizable = false
+        script.autoresizingMask = [.width]
+        script.textContainer?.widthTracksTextView = true
+        script.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        script.string = rule.script
+        let scriptScroll = NSScrollView()
+        scriptScroll.hasVerticalScroller = true
+        scriptScroll.borderType = .bezelBorder
+        scriptScroll.documentView = script
+        let remove = NSButton(title: L("删除"), target: self, action: #selector(removeCommand(_:)))
+        row.addArrangedSubview(pattern)
+        row.addArrangedSubview(scriptScroll)
+        row.addArrangedSubview(remove)
+        for view in [pattern, scriptScroll] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
+        }
+        scriptScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        commandRows.addArrangedSubview(row)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalTo: commandRows.widthAnchor).isActive = true
+        commandFields.append((pattern, script))
+    }
+    @objc private func removeCommand(_ sender: NSButton) {
+        guard let row = sender.superview as? NSStackView,
+              let index = commandRows.arrangedSubviews.firstIndex(of: row) else { return }
+        commandRows.removeArrangedSubview(row)
+        row.removeFromSuperview()
+        commandFields.remove(at: index)
+    }
+    private func currentCommands() throws -> [CommandRule] {
+        let rules = commandFields.map { CommandRule(pattern: $0.pattern.stringValue, script: $0.script.string) }
+        _ = try decodeCommands(encodeCommands(rules))
+        return rules
     }
 
     private func fill(_ view: NSView, in stack: NSStackView) {
@@ -340,6 +442,7 @@ final class SettingsController: NSObject {
             fields.removeAll()
             editors.removeAll()
             targetRows = NSStackView()
+            commandFields.removeAll()
             window = makeWindow()
             if let frame = frame { window?.setFrame(frame, display: true) }
             oldWindow?.close()
@@ -354,6 +457,9 @@ final class SettingsController: NSObject {
         targetApplications = configuredTargets()
         renderTargets()
         jevCheckbox?.state = jevEnabled() ? .on : .off
+        for row in commandRows.arrangedSubviews { commandRows.removeArrangedSubview(row); row.removeFromSuperview() }
+        commandFields.removeAll()
+        for rule in (try? decodeCommands(setting(SettingKey.commands, "[]"))) ?? [] { appendCommand(rule) }
         for section in sections {
             for spec in section.fields {
                 let value = setting(spec.key, spec.fallback)
@@ -368,8 +474,10 @@ final class SettingsController: NSObject {
     @objc private func cancel() { window?.close() }
     @objc private func save() {
         window?.makeFirstResponder(nil)
+        let commands: [CommandRule]
         do {
             _ = try extraRequestParameters(editors[SettingKey.oaExtraParameters]?.string ?? "")
+            commands = try currentCommands()
         } catch {
             showNotice(L("额外请求参数无效"), (error as? ProbeError)?.description ?? error.localizedDescription)
             return
@@ -402,6 +510,7 @@ final class SettingsController: NSObject {
         for (key, editor) in editors {
             setSetting(key, editor.string)
         }
+        setSetting(SettingKey.commands, encodeCommands(commands))
         window?.close()
         onImported?()
     }
@@ -415,8 +524,9 @@ final class SettingsController: NSObject {
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let values = currentValues()
+            let values = try currentValues()
             _ = try extraRequestParameters(values[SettingKey.oaExtraParameters] ?? "")
+            _ = try decodeCommands(values[SettingKey.commands] ?? "[]")
             let data = try encodeSettingsFile(values)
             try data.write(to: url, options: .atomic)
             showNotice(L("配置已导出"), L("文件里包含 Token，只适合在你自己的系统之间拷贝，不要公开分享。"))
@@ -452,7 +562,7 @@ final class SettingsController: NSObject {
         let index = languagePicker?.indexOfSelectedItem ?? 0
         return LanguagePreference.values.indices.contains(index) ? LanguagePreference.values[index] : "system"
     }
-    private func currentValues() -> [String: String] {
+    private func currentValues() throws -> [String: String] {
         window?.makeFirstResponder(nil)
         let useForm = window?.isVisible == true
         var values: [String: String] = [:]
@@ -470,6 +580,7 @@ final class SettingsController: NSObject {
                 }
             }
         }
+        values[SettingKey.commands] = useForm ? encodeCommands(try currentCommands()) : setting(SettingKey.commands, "[]")
         return values
     }
     private func addApplications(_ urls: [URL]) {
@@ -1116,6 +1227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventTap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var processing = false
+    private var commandRunner: CommandRunner?
     private var pipelineToken = UUID()
     private var activeRoundID: UUID?
     private var fieldHUD: NSPanel?
@@ -1136,10 +1248,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf"),
                let image = NSImage(contentsOf: url) {
                 image.size = NSSize(width: 18, height: 18)
-                image.isTemplate = true
-                image.accessibilityDescription = L("Hola · 言好")
-                idleImage = image
-                button.image = image
+                if Bundle.main.object(forInfoDictionaryKey: "HolaBuildChannel") as? String == "dev" {
+                    let tinted = NSImage(size: image.size)
+                    tinted.lockFocus()
+                    image.draw(in: NSRect(origin: .zero, size: image.size))
+                    NSColor.systemYellow.setFill()
+                    NSRect(origin: .zero, size: image.size).fill(using: .sourceIn)
+                    tinted.unlockFocus()
+                    tinted.isTemplate = false
+                    idleImage = tinted
+                } else {
+                    image.isTemplate = true
+                    idleImage = image
+                }
+                idleImage?.accessibilityDescription = L("Hola · 言好")
+                button.image = idleImage
             } else {
                 button.title = L("言")
             }
@@ -1173,6 +1296,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CallLog.shared.observe { [weak self] in self?.refreshHistoryMenu() }
         refreshHistoryMenu()
         updateStatus(L("未开启"))
+        DispatchQueue.main.async { [weak self] in self?.startRunning(interactive: false) }
+        if CommandLine.arguments.contains("--show-commands") {
+            DispatchQueue.main.async { [weak self] in self?.settingsController.show(commandsTab: true) }
+        }
     }
     func applicationWillTerminate(_ notification: Notification) { stopRunning() }
 
@@ -1401,22 +1528,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleRunning() {
         if running { stopRunning(); return }
+        startRunning(interactive: true)
+    }
+    private func startRunning(interactive: Bool) {
+        guard !running else { return }
         guard AXIsProcessTrusted() else {
-            requestPermission()
-            alert(L("未获辅助功能权限"), L("请先在系统设置→隐私与安全性→辅助功能中允许本工具，然后再开启。"))
+            updateStatus(L("请在系统设置→隐私与安全性→辅助功能中允许本工具"))
+            if interactive {
+                requestPermission()
+                alert(L("未获辅助功能权限"), L("请先在系统设置→隐私与安全性→辅助功能中允许本工具，然后再开启。"))
+            }
             return
         }
         targetBundles = Set(configuredTargets().map(\.bundleID))
         guard !targetBundles.isEmpty else {
-            alert(L("目标应用未配置"), L("请先在设置里拖入至少一个应用。")); return
+            updateStatus(L("目标应用未配置"))
+            if interactive { alert(L("目标应用未配置"), L("请先在设置里拖入至少一个应用。")) }
+            return
         }
         guard installEventTap() else {
             removeEventTap()
-            alert(L("开启失败"), L("无法创建键盘事件 tap。请在系统设置→隐私与安全性→输入监控中允许本工具，然后退出工具重开再试。"))
+            updateStatus(L("无法创建键盘事件 tap。请检查输入监控权限"))
+            if interactive { alert(L("开启失败"), L("无法创建键盘事件 tap。请在系统设置→隐私与安全性→输入监控中允许本工具，然后退出工具重开再试。")) }
             return
         }
         running = true
-        UserDefaults.standard.set(true, forKey: SettingKey.resumeRunning)
         applyPolishMark()
         pendingFill = nil
         pendingTarget = nil
@@ -1629,8 +1765,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingTarget = nil
         setBusy(true)
         updateStatus(L("判断中…"))
-        DispatchQueue.main.async { [weak self] in self?.runPipeline(current: current, target: target) }
+        DispatchQueue.main.async { [weak self] in self?.runCommandOrPipeline(current: current, target: target) }
         return nil
+    }
+
+    private func runCommandOrPipeline(current: String, target: Target) {
+        let rules = (try? decodeCommands(setting(SettingKey.commands, "[]"))) ?? []
+        guard let rule = matchingCommand(current, rules: rules) else {
+            runPipeline(current: current, target: target)
+            return
+        }
+        let token = UUID()
+        pipelineToken = token
+        updateStatus(L("执行指令中…"))
+        commandRunner = CommandRunner(script: rule.script, input: current) { [weak self] result in
+            guard let self = self, self.processing, self.pipelineToken == token else { return }
+            self.commandRunner = nil
+            switch result {
+            case .failure(let error):
+                self.failPipeline(L("指令失败，未发送：%1$@", error.description))
+            case .success(let command):
+                guard command.interrupt else {
+                    self.runPipeline(current: current, target: target)
+                    return
+                }
+                if let replacement = command.replacement, !replacement.isEmpty, replacement != current {
+                    let draft = EmbeddedDraft(current)
+                    let wrote: Bool
+                    if draft.hasObjects {
+                        let parts = replacement.split(separator: EmbeddedDraft.objectCharacter, omittingEmptySubsequences: false).map(String.init)
+                        wrote = parts.count == draft.segments.count
+                            && self.writeBackPreservingObjects(parts, draft: draft, target: target)
+                    } else {
+                        wrote = self.writeBack(replacement, original: current, target: target)
+                    }
+                    guard wrote else {
+                        self.failPipeline(L("指令替换失败，未发送"))
+                        return
+                    }
+                    self.pendingFill = replacement
+                    self.pendingTarget = target
+                }
+                self.processing = false
+                self.setBusy(false)
+                self.updateStatus(L("指令已拦截回车"))
+            }
+        }
     }
 
     // MARK: - 润色链路

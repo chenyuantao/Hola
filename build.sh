@@ -5,8 +5,14 @@ if [[ "$(uname -s)" != Darwin ]]; then
   echo 'This build requires macOS and Xcode Command Line Tools.' >&2
   exit 1
 fi
-APP="${APP_PATH:-$PWD/build/Hola.app}"
 SIGN_ID="${SIGN_ID:-Hola Local}"
+BUILD_CHANNEL="${BUILD_CHANNEL:-dev}"
+case "$BUILD_CHANNEL" in
+  dev) APP_NAME="HolaDev"; BUNDLE_ID="local.holadev" ;;
+  release) APP_NAME="Hola"; BUNDLE_ID="local.hola" ;;
+  *) echo "Unsupported BUILD_CHANNEL: $BUILD_CHANNEL" >&2; exit 1 ;;
+esac
+APP="${APP_PATH:-$PWD/build/$APP_NAME.app}"
 
 # 复用签名身份有助于系统识别更新；权限是否保留仍由 macOS 决定。
 ensure_signing_identity() {
@@ -60,19 +66,24 @@ for arch in "${architectures[@]}"; do
     *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
   esac
   xcrun --sdk macosx swiftc -swift-version 5 -O -target "$arch-apple-macos12.0" \
-    -framework AppKit -framework ApplicationServices -framework Carbon -framework ServiceManagement \
-    Sources/Localization.swift Sources/Settings.swift Sources/EmbeddedDraft.swift Sources/main.swift -o "$work_build/Hola-$arch"
-  binaries+=("$work_build/Hola-$arch")
+    -framework AppKit -framework ApplicationServices -framework Carbon -framework ServiceManagement -framework JavaScriptCore \
+    Sources/Localization.swift Sources/Settings.swift Sources/EmbeddedDraft.swift Sources/Commands.swift Sources/main.swift -o "$work_build/$APP_NAME-$arch"
+  binaries+=("$work_build/$APP_NAME-$arch")
 done
-xcrun lipo -create "${binaries[@]}" -output "$APP/Contents/MacOS/Hola"
+xcrun lipo -create "${binaries[@]}" -output "$APP/Contents/MacOS/$APP_NAME"
 cp -R Resources/en.lproj Resources/zh-Hans.lproj "$APP/Contents/Resources/"
 cp Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :HolaBuildChannel string $BUILD_CHANNEL" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$APP/Contents/Info.plist"
 if [[ -n "${APP_VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$APP/Contents/Info.plist"
 fi
 cp Resources/AppIcon.icns Resources/MenuBarIcon.pdf "$APP/Contents/Resources/"
-sign_options=(--force --sign "$SIGN_ID" --identifier "local.hola")
+sign_options=(--force --sign "$SIGN_ID" --identifier "$BUNDLE_ID")
 if [[ -n "${SIGN_KEYCHAIN:-}" ]]; then
   sign_options+=(--keychain "$SIGN_KEYCHAIN")
 fi

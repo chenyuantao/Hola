@@ -4,8 +4,8 @@ import Foundation
 struct LocalizationTests {
     static func main() throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-        guard let appBundle = Bundle(url: root.appendingPathComponent("build/Hola.app")) else {
-            fatalError("Build Hola.app before running localization tests.")
+        guard let appBundle = Bundle(url: URL(fileURLWithPath: CommandLine.arguments[2])) else {
+            fatalError("Build the app before running localization tests.")
         }
         let cases: [([String], String)] = [
             (["en-US"], "en"), (["en-GB", "zh-Hans"], "en"),
@@ -60,7 +60,7 @@ struct LocalizationTests {
                      == "Polishing (Jev 95%)…")
         precondition(en.text("unknown.key") == "unknown.key")
         // Every call site must have a resource entry, including nested messages.
-        let source = try ["Sources/main.swift", "Sources/Settings.swift"].map {
+        let source = try ["Sources/main.swift", "Sources/Settings.swift", "Sources/Commands.swift"].map {
             try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8)
         }.joined(separator: "\n")
         let calls = try NSRegularExpression(pattern: #"\bL\(("(?:\\.|[^"\\])*")"#)

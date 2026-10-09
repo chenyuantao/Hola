@@ -21,6 +21,42 @@ struct SettingsTests {
         let extras = #"{"reasoning_effort":"high","stream":false}"#
         let extraRoundTrip = try decodeSettingsFile(encodeSettingsFile([SettingKey.oaExtraParameters: extras]))
         precondition(extraRoundTrip[SettingKey.oaExtraParameters] == extras)
+        let commands = [CommandRule(pattern: "^#", script: "async (input) => ({interrupt: true, replacement: input.slice(1)})")]
+        let commandRoundTrip = try decodeSettingsFile(encodeSettingsFile([SettingKey.commands: encodeCommands(commands)]))
+        let decodedCommands = try decodeCommands(commandRoundTrip[SettingKey.commands]!)
+        precondition(decodedCommands == commands)
+        precondition(matchingCommand("#hello", rules: commands) == commands[0])
+        precondition(matchingCommand("hello", rules: commands) == nil)
+        func run(_ script: String) -> Result<CommandResult, ProbeError> {
+            var output: Result<CommandResult, ProbeError>?
+            var runner: CommandRunner? = CommandRunner(script: script, input: "#hello") { output = $0 }
+            let deadline = Date().addingTimeInterval(3)
+            while output == nil && Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            withExtendedLifetime(runner) {}
+            runner = nil
+            return output ?? .failure(ProbeError("Test timeout"))
+        }
+        switch run(commands[0].script) {
+        case .success(let result): precondition(result.interrupt && result.replacement == "hello")
+        case .failure(let error): fatalError(error.description)
+        }
+        switch run("(input) => ({interrupt: false, replacement: 'ignored'});") {
+        case .success(let result): precondition(!result.interrupt && result.replacement == "ignored")
+        case .failure(let error): fatalError(error.description)
+        }
+        switch run("async function (input) {\n  await Promise.resolve();\n  return {interrupt: true};\n}") {
+        case .success(let result): precondition(result.interrupt && result.replacement == nil)
+        case .failure(let error): fatalError(error.description)
+        }
+        switch run("(input) => Promise.resolve({interrupt: true, replacement: input.toUpperCase()})") {
+        case .success(let result): precondition(result.interrupt && result.replacement == "#HELLO")
+        case .failure(let error): fatalError(error.description)
+        }
+        if case .success = run("(input) => ({interrupt: 'wrong'})") { fatalError("Invalid result accepted") }
+        if case .success = run("({interrupt: true})") { fatalError("Non-function script accepted") }
+        if case .success = run("(input) => { throw new Error('boom'); }") { fatalError("Thrown error accepted") }
         let body = try chatCompletionBody(model: "gpt-5.4", system: "rules", user: "draft", extraParameters: extras)
         precondition(body["model"] as? String == "gpt-5.4")
         precondition(body["reasoning_effort"] as? String == "high")
@@ -46,7 +82,9 @@ struct SettingsTests {
             [SettingKey.oaExtraParameters: #"{"model":"override"}"#],
             [SettingKey.oaExtraParameters: #"{"messages":[]}"#],
             [SettingKey.oaExtraParameters: #"{"stream":true}"#],
-            [SettingKey.oaExtraParameters: #"{"stream":0}"#]
+            [SettingKey.oaExtraParameters: #"{"stream":0}"#],
+            [SettingKey.commands: "invalid"],
+            [SettingKey.commands: encodeCommands([CommandRule(pattern: "[", script: "return 1")])]
         ]
         for values in invalid {
             do {
@@ -57,6 +95,10 @@ struct SettingsTests {
         do {
             _ = try decodeSettingsFile(Data(#"{"kind":"hola-settings","version":1,"settings":{"targetApplications":[],"openAIModel":"test"}}"#.utf8))
             fatalError("Wrong Apps value type accepted")
+        } catch is ProbeError { }
+        do {
+            _ = try decodeSettingsFile(Data(#"{"kind":"hola-settings","version":1,"settings":{"commands":[]}}"#.utf8))
+            fatalError("Wrong commands value type accepted")
         } catch is ProbeError { }
         print("Passed: settings round trips, extra request body, legacy compatibility, malformed settings rejection.")
     }

@@ -68,18 +68,17 @@ You need macOS 12 or later and Xcode Command Line Tools. If the developer tools 
 xcode-select --install
 ```
 
-From the project directory, build and open the app:
+From the project directory, build and restart the app in one step:
 
 ```bash
-bash build.sh
-open build/Hola.app
+bash scripts/build-and-restart.sh
 ```
 
-You can also copy the built app to Applications and open it there before granting permissions.
+The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`, showing the Commands tab. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
 
 > The app is called **Hola**, with the Chinese brand name **言好**. After upgrading from the previous app identity, grant permissions to Hola again. On first launch, Hola migrates previous settings and history.
 
-The build script creates or reuses the `Hola Local` signing identity in your login keychain, then signs and verifies the app. This is a local self-signed build, without Developer ID notarization.
+The build script creates or reuses the `Hola Local` signing identity in your login keychain, then signs and verifies the app. By default it produces `HolaDev.app` (ID `local.holadev`) with a yellow menu bar icon. The release pipeline produces `Hola.app` (ID `local.hola`) with the standard template icon. This is a local self-signed build, without Developer ID notarization.
 
 ### 2. Grant permissions
 
@@ -127,7 +126,7 @@ While processing, a **Polishing** indicator appears near the input field and the
 
 Enable **Launch at Login** in Settings on macOS 13 or later. If macOS requests approval, allow Hola in the system Login Items settings. On macOS 12, add Hola manually in System Preferences → Users & Groups → Login Items.
 
-Hola remembers whether you last enabled or stopped it. If you quit while it is enabled, it resumes on the next launch; after a manual stop, it stays stopped. Missing permissions or target apps prevent it from enabling, with the reason shown in the menu status. A yellow dot on the menu bar icon indicates that Hola is not enabled.
+Whenever Hola opens, it automatically enables Return handling if Accessibility and Input Monitoring permissions and a target app are available. Stopping it manually affects only the current run. If it cannot start, the menu status shows why. A yellow dot on the menu bar icon indicates that Hola is not enabled.
 
 ## Interface language
 
@@ -171,7 +170,19 @@ Jev is disabled by default. When enabled, it first decides whether a draft needs
 | **Default: Jev disabled** | Each round requests a revision; Hola forwards Return or inserts the revision depending on the result |
 | **Jev enabled** | Check first; forward Return if no revision is needed, otherwise call the polishing service |
 
-Use **Export / Import** in Settings to transfer your target app list and model configuration. Import replaces the corresponding settings present in the file. Exported files contain API tokens; keep them private.
+### Commands
+
+Add rules in the **Commands** tab of Settings. Rules match the full original input in order; for example, `^#` matches drafts beginning with `#`. Each script is a function expression. Hola calls it with the original draft as `input`; it may return the result object or a Promise of it:
+
+```javascript
+async (input) => {
+  return { interrupt: true, replacement: input.slice(1) };
+}
+```
+
+`interrupt: true` blocks this Return and inserts a nonempty `replacement` when provided. Press Return again to send the inserted draft. `interrupt: false` continues the normal polishing flow and ignores `replacement`. Script or replacement failures do not send the draft. Commands run only in selected target apps.
+
+Use **Export / Import** in Settings to transfer your target app list, model configuration, and commands. Import replaces the corresponding settings present in the file. Exported files contain API tokens and command scripts; keep them private.
 
 ## Compatibility and data
 
@@ -191,6 +202,7 @@ Before inserting a revision or forwarding Return, Hola checks the foreground app
 
 ```text
 ~/Library/Application Support/local.hola/round-history.json
+~/Library/Application Support/local.holadev/round-history.json (development build)
 ```
 
 </details>

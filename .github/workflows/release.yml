@@ -64,6 +64,7 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
           ARCHS: arm64 x86_64
           SIGN_ID: ${{ secrets.MACOS_CERTIFICATE_SHA1 }}
+          BUILD_CHANNEL: release
           SIGN_KEYCHAIN: ${{ runner.temp }}/hola-release.keychain-db
         run: |
           bash build.sh
