@@ -1127,6 +1127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // 菜单栏常驻，无 Dock 图标、无主窗口
+        installEditMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf"),
@@ -1171,6 +1172,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatus(L("未开启"))
     }
     func applicationWillTerminate(_ notification: Notification) { stopRunning() }
+
+    private func installEditMenu() {
+        let mainMenu = NSMenu()
+        let editItem = NSMenuItem(title: L("编辑"), action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: L("编辑"))
+        for (title, action, key, modifiers) in [
+            (L("撤销"), #selector(UndoManager.undo), "z", NSEvent.ModifierFlags.command),
+            (L("重做"), #selector(UndoManager.redo), "z", [.command, .shift]),
+            (L("剪切"), #selector(NSText.cut(_:)), "x", .command),
+            (L("复制"), #selector(NSText.copy(_:)), "c", .command),
+            (L("粘贴"), #selector(NSText.paste(_:)), "v", .command),
+            (L("全选"), #selector(NSText.selectAll(_:)), "a", .command)
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            editMenu.addItem(item)
+        }
+        mainMenu.addItem(editItem)
+        mainMenu.setSubmenu(editMenu, for: editItem)
+        NSApp.mainMenu = mainMenu
+    }
 
     private func buildMenu() {
         let menu = NSMenu()

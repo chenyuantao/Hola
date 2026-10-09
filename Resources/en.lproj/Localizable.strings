@@ -177,3 +177,10 @@
 "文件中的 Apps 列表、语言、Jev 和 OpenAI 设置已导入；未包含的设置保持不变。" = "Imported Apps, language, Jev and OpenAI settings from the file. Settings not included remain unchanged.";
 
 "配置文件中的设置格式无效" = "Invalid settings format in configuration file";
+"编辑" = "Edit";
+"撤销" = "Undo";
+"重做" = "Redo";
+"剪切" = "Cut";
+"复制" = "Copy";
+"粘贴" = "Paste";
+"全选" = "Select All";
