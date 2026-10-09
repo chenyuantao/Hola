@@ -152,7 +152,10 @@ open build/Hola.app
 | 接口地址 | 服务商提供的 Base URL，例如 `https://api.openai.com/v1` |
 | Token | 对应服务商的 API 凭据 |
 | 模型 | 该接口支持的模型名称 |
+| 额外请求参数 | 可选的 JSON 对象，合并进 Chat Completions 请求体；例如 `{"reasoning_effort":"high","stream":false}`。不能覆盖 `model` 或 `messages`，当前仅支持 `stream: false` |
 | 润色提示词 | 定义表达风格，例如更自然、更简洁或更适合工作沟通 |
+
+请求默认使用 `stream: false`。使用已识别的推理模型时，默认加入 `{"reasoning_effort":"low"}`；其他模型不自动添加推理参数。额外请求参数中的值优先于默认值。
 
 默认润色提示词：
 

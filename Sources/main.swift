@@ -109,7 +109,7 @@ final class SettingsController: NSObject {
     private var sections: [(title: String, hint: String, fields: [Spec])] { [
         (
             "Jev",
-            L("可选。开启后先判断是否需要润色；关闭后每次都采用 OpenAI 接口的结果。"),
+            L("可选。开启后先判断是否需要润色；关闭后每次都调用润色接口。"),
             [
                 Spec(key: SettingKey.jevURL, title: L("接口地址"), fallback: defaultJevURL, placeholder: defaultJevURL, multiline: false),
                 Spec(key: SettingKey.jevToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
@@ -118,12 +118,13 @@ final class SettingsController: NSObject {
             ]
         ),
         (
-            "OpenAI",
-            L("润色草稿。接口地址填服务商的 Base URL 即可，会自动请求 chat/completions，也可以填写完整地址。智谱按量计费用 https://open.bigmodel.cn/api/paas/v4 ，GLM Coding Plan 用 https://open.bigmodel.cn/api/coding/paas/v4 。"),
+            L("润色接口"),
+            L("填写兼容 Chat Completions 的接口地址；Base URL 会自动补全路径。额外参数填写 JSON 对象，stream 仅支持 false。"),
             [
-                Spec(key: SettingKey.oaURL, title: L("接口地址"), fallback: "", placeholder: "https://api.openai.com/v1", multiline: false),
+                Spec(key: SettingKey.oaURL, title: L("接口地址"), fallback: "", placeholder: "https://api.example.com/v1", multiline: false),
                 Spec(key: SettingKey.oaToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
-                Spec(key: SettingKey.oaModel, title: L("模型"), fallback: "", placeholder: "gpt-4o-mini", multiline: false),
+                Spec(key: SettingKey.oaModel, title: L("模型"), fallback: "", placeholder: L("服务商提供的模型 ID"), multiline: false),
+                Spec(key: SettingKey.oaExtraParameters, title: L("额外请求参数（JSON 对象）"), fallback: "", placeholder: "", multiline: true),
                 Spec(key: SettingKey.oaPrompt, title: L("润色规则提示词"), fallback: defaultOAPrompt, placeholder: "", multiline: true)
             ]
         )
@@ -367,6 +368,12 @@ final class SettingsController: NSObject {
     @objc private func cancel() { window?.close() }
     @objc private func save() {
         window?.makeFirstResponder(nil)
+        do {
+            _ = try extraRequestParameters(editors[SettingKey.oaExtraParameters]?.string ?? "")
+        } catch {
+            showNotice(L("额外请求参数无效"), (error as? ProbeError)?.description ?? error.localizedDescription)
+            return
+        }
         if #available(macOS 13.0, *) {
             let service = SMAppService.mainApp
             let wantsLogin = loginCheckbox?.state == .on
@@ -408,11 +415,13 @@ final class SettingsController: NSObject {
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let data = try encodeSettingsFile(currentValues())
+            let values = currentValues()
+            _ = try extraRequestParameters(values[SettingKey.oaExtraParameters] ?? "")
+            let data = try encodeSettingsFile(values)
             try data.write(to: url, options: .atomic)
             showNotice(L("配置已导出"), L("文件里包含 Token，只适合在你自己的系统之间拷贝，不要公开分享。"))
         } catch {
-            showNotice(L("导出失败"), error.localizedDescription)
+            showNotice(L("导出失败"), (error as? ProbeError)?.description ?? error.localizedDescription)
         }
     }
     @discardableResult
@@ -1736,10 +1745,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             completion(.failure(ProbeError(L("OpenAI 接口地址无效"))))
             return
         }
-        chatCompletion(urlString: requestURL, token: token, model: model, system: system, user: content, completion: completion)
+        let extraParameters = setting(SettingKey.oaExtraParameters)
+        chatCompletion(urlString: requestURL, token: token, model: model, system: system,
+                       user: content, extraParameters: extraParameters, completion: completion)
     }
     // OpenAI 兼容 chat/completions：{model?, messages:[system,user]} → choices[0].message.content
     private func chatCompletion(urlString: String, token: String, model: String, system: String, user: String,
+                                extraParameters: String,
                                 completion: @escaping (Result<String, ProbeError>) -> Void) {
         func fail(_ message: String) {
             completion(.failure(ProbeError(message)))
@@ -1750,11 +1762,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        var body: [String: Any] = [
-            "messages": [["role": "system", "content": system], ["role": "user", "content": user]]
-        ]
-        if !model.isEmpty { body["model"] = model }
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+        guard let body = try? chatCompletionBody(model: model, system: system, user: user,
+                                                 extraParameters: extraParameters),
+              let data = try? JSONSerialization.data(withJSONObject: body) else {
             fail(L("请求体序列化失败")); return
         }
         request.httpBody = data

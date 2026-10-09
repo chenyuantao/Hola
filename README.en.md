@@ -153,7 +153,10 @@ Hola supports OpenAI-compatible `chat/completions` services. Enter a Base URL or
 | API URL | Your provider's Base URL, such as `https://api.openai.com/v1` |
 | Token | Your API credentials for that provider |
 | Model | A model name supported by the endpoint |
+| Extra request parameters | Optional JSON object merged into the Chat Completions request, for example `{"reasoning_effort":"high","stream":false}`. Cannot override `model` or `messages`; only `stream: false` is supported |
 | Polishing prompt | Your preferred style: more natural, concise, or suitable for work |
+
+Requests default to `stream: false`. Recognized reasoning models also default to `{"reasoning_effort":"low"}`; other models receive no automatic reasoning parameter. Values in extra request parameters take precedence.
 
 Default English polishing prompt:
 

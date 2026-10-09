@@ -17,6 +17,7 @@ enum SettingKey {
     static let oaToken = "openAIToken"
     static let oaModel = "openAIModel"
     static let oaPrompt = "openAIPrompt"
+    static let oaExtraParameters = "openAIExtraParameters"
 }
 func setting(_ key: String, _ fallback: String = "") -> String {
     let v = UserDefaults.standard.string(forKey: key) ?? ""
@@ -28,8 +29,44 @@ private let settingsFileKind = "hola-settings"
 private let settingsFileVersion = 1
 private let portableSettingKeys = [
     LanguagePreference.key, SettingKey.targets, SettingKey.jevEnabled, SettingKey.jevURL, SettingKey.jevToken, SettingKey.jevModel, SettingKey.jevPrompt,
-    SettingKey.oaURL, SettingKey.oaToken, SettingKey.oaModel, SettingKey.oaPrompt
+    SettingKey.oaURL, SettingKey.oaToken, SettingKey.oaModel, SettingKey.oaPrompt, SettingKey.oaExtraParameters
 ]
+
+func extraRequestParameters(_ raw: String) throws -> [String: Any] {
+    guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+    guard let data = raw.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw ProbeError(L("额外请求参数必须是 JSON 对象"))
+    }
+    guard object["model"] == nil, object["messages"] == nil else {
+        throw ProbeError(L("额外请求参数不能包含 model 或 messages"))
+    }
+    if let stream = object["stream"] {
+        guard let flag = stream as? NSNumber,
+              CFGetTypeID(flag) == CFBooleanGetTypeID(), !flag.boolValue else {
+            throw ProbeError(L("当前仅支持 stream: false"))
+        }
+    }
+    return object
+}
+
+private func usesDefaultReasoningEffort(_ model: String) -> Bool {
+    let name = model.lowercased()
+    return ["gpt-5", "gpt-6", "o3", "o4"].contains { family in
+        name == family || name.hasPrefix(family + "-") || name.hasPrefix(family + ".")
+    } && !name.contains("-chat-")
+}
+
+func chatCompletionBody(model: String, system: String, user: String, extraParameters: String) throws -> [String: Any] {
+    var body = try extraRequestParameters(extraParameters)
+    if usesDefaultReasoningEffort(model), body["reasoning_effort"] == nil {
+        body["reasoning_effort"] = "low"
+    }
+    if body["stream"] == nil { body["stream"] = false }
+    body["messages"] = [["role": "system", "content": system], ["role": "user", "content": user]]
+    if !model.isEmpty { body["model"] = model }
+    return body
+}
 
 // 旧标识仅用于升级兼容；所有新配置与历史均使用 Hola 标识。
 func migrateLegacyData() {
@@ -101,6 +138,9 @@ func decodeSettingsFile(_ data: Data) throws -> [String: String] {
             throw ProbeError(L("配置文件中的 Apps 列表无效"))
         }
     }
+    if let raw = values[SettingKey.oaExtraParameters] {
+        _ = try extraRequestParameters(raw)
+    }
     return values
 }
 
@@ -118,4 +158,3 @@ func targetSettingsValue(_ targets: [TargetApplication]) -> String {
     return String(data: data, encoding: .utf8) ?? "[]"
 }
 func jevEnabled() -> Bool { setting(SettingKey.jevEnabled) == "true" }
-
