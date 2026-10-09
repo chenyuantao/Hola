@@ -34,6 +34,14 @@ struct SettingsTests {
         let titled = makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXSplitGroup/AXGroup")
         precondition(titled.label == "说明")
         precondition(titled.id != makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXGroup").id)
+        let titledDisplay = componentPermissionDisplay(ComponentPermission(id: titled.id, label: titled.label, decision: .allow))
+        precondition(titledDisplay.tree == "AXSplitGroup / AXGroup / AXTextField")
+        precondition(titledDisplay.detail == "id · 标题 · 占位 · 说明")
+        let searchDisplay = componentPermissionDisplay(ComponentPermission(id: search.id, label: search.label, decision: .deny))
+        precondition(searchDisplay.tree == "AXTextField (AXSearchField)")
+        precondition(searchDisplay.detail == "搜索框")
+        let legacyDisplay = componentPermissionDisplay(permission)
+        precondition(legacyDisplay.tree == "composer" && legacyDisplay.detail == "输入消息")
         let empty = try decodeSettingsFile(encodeSettingsFile([SettingKey.targets: "[]"]))
         precondition(empty[SettingKey.targets] == "[]")
         let legacy = Data(#"{"kind":"happy-talk-settings","version":1,"settings":{"openAIModel":"legacy"}}"#.utf8)
@@ -403,6 +411,12 @@ struct SettingsTests {
           } catch (e) { return { interrupt: true, replacement: e.name }; }
         }
         """, "TimeoutError", input: "\(base)/hang", wait: 5)
+        precondition(openAIConfigurationReady(url: "https://api.example.com/v1", token: "sk", model: "gpt", extraParameters: ""))
+        precondition(!openAIConfigurationReady(url: "", token: "sk", model: "gpt", extraParameters: ""))
+        precondition(!openAIConfigurationReady(url: "https://api.example.com/v1", token: " ", model: "gpt", extraParameters: ""))
+        precondition(!openAIConfigurationReady(url: "https://api.example.com/v1", token: "sk", model: "", extraParameters: ""))
+        precondition(!openAIConfigurationReady(url: "notaurl", token: "sk", model: "gpt", extraParameters: ""))
+        precondition(!openAIConfigurationReady(url: "https://api.example.com/v1", token: "sk", model: "gpt", extraParameters: "[]"))
     }
 }
 

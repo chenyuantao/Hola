@@ -74,7 +74,7 @@ From the project directory, build and restart the app in one step:
 bash scripts/build-and-restart.sh
 ```
 
-The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`. Settings opens on General; Commands is the second tab. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
+The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`. Clicking the menu bar icon opens the panel directly on General. The sections are General, Jev, Persona, Commands, and History. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
 
 > The app is called **Hola**, with the Chinese brand name **言好**. After upgrading from the previous app identity, grant permissions to Hola again. On first launch, Hola migrates previous settings and history.
 
@@ -89,14 +89,14 @@ In **System Settings → Privacy & Security**, grant the following permissions t
 | Accessibility | Read the current draft and insert its revision |
 | Input Monitoring | Handle Return in your selected apps to trigger polishing |
 
-Quit and reopen Hola after granting permissions. Click the **Hola icon** in the menu bar to open Settings.
+Quit and reopen Hola after granting permissions. Click the **Hola icon** in the menu bar to open the panel directly.
 
 ### 3. Choose apps and a model
 
-1. Open **Settings…** from the menu bar.
-2. Drag one or more `.app` files from Applications into the target apps area.
-3. Enter the **API URL, Token, and Model** for your OpenAI-compatible provider. Adjust the polishing prompt if needed.
-4. Save your settings and click **Enable** in the menu.
+1. Click the menu bar icon and grant Accessibility and Input Monitoring on **General**.
+2. Enter the **API URL, Token, and Model** for your OpenAI-compatible provider. Changes apply immediately. **Enable intercept** stays unavailable until permissions, this configuration, and at least one target app are ready.
+3. Drag one or more `.app` files from Applications into the target apps area.
+4. Turn on **Enable intercept**. The decision prompt and polishing prompt live under **Persona**.
 
 Try Return-triggered polishing with a non-sensitive draft in a target app first.
 
@@ -126,19 +126,19 @@ With **Intercept some**, the first Return in a field asks beside that field:
 
 | Choice | This Return | Afterwards |
 | --- | --- | --- |
-| Don't intercept | The original app handles it | Return in this field is left alone |
+| Don't intercept | It stays intercepted and is not sent | Later Returns in this field are left alone |
 | Allow | Polishing starts | Later Returns in this field are intercepted |
-| Not now | The original app handles it | Nothing is remembered, so the next Return asks again |
+| Not now | It stays intercepted and is not sent | Nothing is remembered, so the next Return asks again |
 
-Saved choices appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Save settings before a scope change takes effect.
+Saved choices appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately.
 
-While processing, a **Polishing** indicator appears near the input field and the menu bar shows progress. A **green dot** indicates success; a **red dot** indicates failure. Open **History…** to inspect originals, revisions, prompts, and processing details.
+While a request is in flight, the input border breathes yellow and the menu bar shows progress. After the revised text is written back, the border turns green until the next Return sends it or another key is pressed. A **green dot** on the menu bar icon indicates success; a **red dot** indicates failure. Open **History** in the panel to inspect originals, revisions, prompts, and processing details.
 
 ## Startup settings
 
 Enable **Launch at Login** in Settings on macOS 13 or later. If macOS requests approval, allow Hola in the system Login Items settings. On macOS 12, add Hola manually in System Preferences → Users & Groups → Login Items.
 
-Whenever Hola opens, it automatically enables Return handling if Accessibility and Input Monitoring permissions and a target app are available. Stopping it manually affects only the current run. If it cannot start, the menu status shows why. A yellow dot on the menu bar icon indicates that Hola is not enabled.
+Whenever Hola opens, it automatically enables Return handling if Accessibility, Input Monitoring, a saved OpenAI configuration, and a target app are available. Stopping it manually affects only the current run. If it cannot start, hover the intercept switch in the footer to see why. A yellow dot on the menu bar icon indicates that Hola is not enabled.
 
 ## Interface language
 
@@ -184,7 +184,7 @@ Jev is disabled by default. When enabled, it first decides whether a draft needs
 
 ### Commands
 
-Add rules in the **Commands** tab of Settings. Rules match the full original input in order; for example, `^#` matches drafts beginning with `#`. Each script is a function expression. Hola calls it with the original draft as `input`; it may return the result object or a Promise of it:
+Add rules in the **Commands** section of the panel. Rules match the full original input in order; for example, `^#` matches drafts beginning with `#`. Each script is a function expression. Hola calls it with the original draft as `input`; it may return the result object or a Promise of it:
 
 ```javascript
 async (input) => {

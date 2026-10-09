@@ -61,35 +61,272 @@ struct Target {
 
 final class ApplicationDropView: NSView {
     var onDrop: (([URL]) -> Void)?
-    private let label = NSTextField(wrappingLabelWithString: L("将一个或多个应用从“应用程序”拖到这里"))
+    private let prompt = NSTextField(wrappingLabelWithString: L("将一个或多个应用从“应用程序”拖到这里"))
+    private let more = NSTextField(wrappingLabelWithString: L("将应用图标拖到这里，即可继续添加"))
+    private let topSpacer = NSView()
+    private let bottomSpacer = NSView()
+    private let root = NSStackView()
+    private let tilesView = AppTileFlowView()
+    private var emptyHeight: NSLayoutConstraint?
+    private var highlighted = false
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         registerForDraggedTypes([.fileURL])
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        label.alignment = .center
-        label.textColor = .secondaryLabelColor
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
+        updateBorder()
+        prompt.alignment = .center
+        prompt.textColor = .secondaryLabelColor
+        prompt.maximumNumberOfLines = 3
+        more.alignment = .center
+        more.font = .systemFont(ofSize: 11)
+        more.textColor = .secondaryLabelColor
+        more.maximumNumberOfLines = 2
+        more.isHidden = true
+        tilesView.isHidden = true
+        root.orientation = .vertical
+        root.alignment = .centerX
+        root.detachesHiddenViews = true
+        root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(root)
+        topSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        bottomSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        root.addArrangedSubview(topSpacer)
+        root.addArrangedSubview(prompt)
+        root.addArrangedSubview(bottomSpacer)
+        root.addArrangedSubview(tilesView)
+        root.addArrangedSubview(more)
+        root.setCustomSpacing(10, after: tilesView)
+        let balance = topSpacer.heightAnchor.constraint(equalTo: bottomSpacer.heightAnchor)
+        balance.priority = .defaultHigh
+        balance.isActive = true
+        prompt.translatesAutoresizingMaskIntoConstraints = false
+        prompt.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
+        more.translatesAutoresizingMaskIntoConstraints = false
+        more.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
+        tilesView.translatesAutoresizingMaskIntoConstraints = false
+        tilesView.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
+        let height = heightAnchor.constraint(equalToConstant: 88)
+        height.isActive = true
+        emptyHeight = height
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8)
+            root.topAnchor.constraint(equalTo: topAnchor),
+            root.leadingAnchor.constraint(equalTo: leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: trailingAnchor),
+            root.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { nil }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    func setShowingApps(_ showing: Bool) {
+        topSpacer.isHidden = showing
+        prompt.isHidden = showing
+        bottomSpacer.isHidden = showing
+        tilesView.isHidden = !showing
+        more.isHidden = !showing
+        emptyHeight?.isActive = !showing
+    }
+    func setTiles(_ tiles: [NSView]) {
+        tilesView.setTiles(tiles)
+    }
+    private func updateBorder() {
+        layer?.borderColor = (highlighted ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorder()
+    }
+    private func accepts(_ sender: NSDraggingInfo) -> Bool {
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        return urls.contains(where: { $0.pathExtension.lowercased() == "app" }) ? .copy : []
+        return urls.contains(where: { $0.pathExtension.lowercased() == "app" })
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard accepts(sender) else { return [] }
+        highlighted = true
+        updateBorder()
+        return .copy
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        highlighted = false
+        updateBorder()
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        highlighted = false
+        updateBorder()
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return false }
         onDrop?(urls)
         return true
+    }
+}
+
+private final class AppTileFlowView: NSView {
+    static let tileWidth: CGFloat = 96
+    static let minimumGap: CGFloat = 16
+    private var tiles: [NSView] = []
+    private var tileHeight: CGFloat = 96
+    private var laidOutColumns = 0
+    private var positionConstraints: [NSLayoutConstraint] = []
+
+    override var isFlipped: Bool { true }
+
+    func setTiles(_ tiles: [NSView]) {
+        positionConstraints.forEach { $0.isActive = false }
+        positionConstraints.removeAll()
+        self.tiles.forEach { $0.removeFromSuperview() }
+        self.tiles = tiles
+        var height: CGFloat = 0
+        for tile in tiles {
+            tile.translatesAutoresizingMaskIntoConstraints = false
+            let width = tile.widthAnchor.constraint(equalToConstant: Self.tileWidth)
+            width.priority = .defaultHigh
+            width.isActive = true
+            height = max(height, tile.fittingSize.height)
+            addSubview(tile)
+        }
+        if height > 1 { tileHeight = height }
+        laidOutColumns = 0
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    private func columnCapacity(for width: CGFloat) -> Int {
+        let stride = Self.tileWidth + Self.minimumGap
+        guard width >= Self.tileWidth, stride > 0 else { return 1 }
+        return max(1, Int((width + Self.minimumGap) / stride))
+    }
+
+    override var intrinsicContentSize: NSSize {
+        guard !tiles.isEmpty else { return NSSize(width: NSView.noIntrinsicMetric, height: 0) }
+        let width = bounds.width > 1 ? bounds.width : Self.tileWidth
+        let columns = min(tiles.count, columnCapacity(for: width))
+        let rows = Int(ceil(Double(tiles.count) / Double(columns)))
+        let height = CGFloat(rows) * tileHeight + CGFloat(max(0, rows - 1)) * Self.minimumGap
+        return NSSize(width: NSView.noIntrinsicMetric, height: height)
+    }
+
+    override func layout() {
+        super.layout()
+        guard !tiles.isEmpty else { return }
+        let columns = min(tiles.count, columnCapacity(for: bounds.width))
+        if columns != laidOutColumns {
+            laidOutColumns = columns
+            invalidateIntrinsicContentSize()
+        }
+        let used = CGFloat(columns) * Self.tileWidth + CGFloat(max(0, columns - 1)) * Self.minimumGap
+        let extra = max(0, bounds.width - used)
+        let gap = columns > 1 ? Self.minimumGap + extra / CGFloat(columns - 1) : 0
+        positionConstraints.forEach { $0.isActive = false }
+        positionConstraints.removeAll()
+        for (index, tile) in tiles.enumerated() {
+            let column = index % columns
+            let row = index / columns
+            let x = CGFloat(column) * (Self.tileWidth + gap)
+            let y = CGFloat(row) * (tileHeight + Self.minimumGap)
+            let constraints = [
+                tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: x),
+                tile.topAnchor.constraint(equalTo: topAnchor, constant: y),
+                tile.widthAnchor.constraint(equalToConstant: Self.tileWidth),
+                tile.heightAnchor.constraint(equalToConstant: tileHeight)
+            ]
+            NSLayoutConstraint.activate(constraints)
+            positionConstraints.append(contentsOf: constraints)
+        }
+    }
+}
+
+private final class AppTileView: NSView {
+    var onSelect: (() -> Void)?
+    private let chosen: Bool
+    private let nameField: NSTextField
+
+    init(image: NSImage?, title: String, chosen: Bool, template: Bool = false) {
+        self.chosen = chosen
+        nameField = NSTextField(wrappingLabelWithString: title)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        let icon = NSImageView()
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.image = image
+        if template { icon.contentTintColor = .secondaryLabelColor }
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        let name = nameField
+        name.alignment = .center
+        name.font = .systemFont(ofSize: 11)
+        name.textColor = chosen ? .controlAccentColor : .labelColor
+        name.maximumNumberOfLines = 2
+        name.lineBreakMode = .byTruncatingTail
+        name.preferredMaxLayoutWidth = 88
+        name.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+        addSubview(name)
+        NSLayoutConstraint.activate([
+            icon.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            icon.centerXAnchor.constraint(equalTo: centerXAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 48),
+            icon.heightAnchor.constraint(equalToConstant: 48),
+            name.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 6),
+            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            name.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            name.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        ])
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 88).isActive = true
+        toolTip = title
+        updateChrome()
+    }
+    override func layout() {
+        super.layout()
+        nameField.preferredMaxLayoutWidth = max(72, bounds.width - 8)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateChrome()
+    }
+    private func updateChrome() {
+        layer?.backgroundColor = chosen ? NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor : nil
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { onSelect != nil }
+    override func mouseDown(with event: NSEvent) { onSelect?() }
+    override func resetCursorRects() {
+        if onSelect != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+}
+
+private final class InterceptHoverView: NSView {
+    private let cover = NSButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        cover.isBordered = false
+        cover.isTransparent = true
+        cover.title = ""
+        cover.focusRingType = .none
+        cover.bezelStyle = .shadowlessSquare
+        cover.setButtonType(.momentaryChange)
+        cover.translatesAutoresizingMaskIntoConstraints = false
+        cover.isHidden = true
+        addSubview(cover)
+        NSLayoutConstraint.activate([
+            cover.leadingAnchor.constraint(equalTo: leadingAnchor),
+            cover.trailingAnchor.constraint(equalTo: trailingAnchor),
+            cover.topAnchor.constraint(equalTo: topAnchor),
+            cover.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+    required init?(coder: NSCoder) { nil }
+    func showReason(_ text: String?) {
+        addSubview(cover)
+        cover.toolTip = text
+        cover.isHidden = text == nil
     }
 }
 let defaultJevURL = "https://api.typesafe.ai/v1/systemone"
@@ -139,8 +376,69 @@ private final class CommandDragHandle: NSView {
     }
 }
 
-// 目标应用、Jev、OpenAI 的配置集中在一个面板里填写。
-final class SettingsController: NSObject {
+private final class PanelTabButton: NSView {
+    let tabIdentifier: String
+    let tabTitle: String
+    let symbolName: String
+    var chosen = false {
+        didSet { needsDisplay = true }
+    }
+    var marksRequired = false {
+        didSet { needsDisplay = true }
+    }
+    weak var clickTarget: AnyObject?
+    var clickAction: Selector?
+
+    init(identifier: String, title: String, symbol: String) {
+        tabIdentifier = identifier
+        tabTitle = title
+        symbolName = symbol
+        super.init(frame: .zero)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 88, height: 64) }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+    override func mouseDown(with event: NSEvent) {
+        guard let clickAction else { return }
+        NSApp.sendAction(clickAction, to: clickTarget, from: self)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        if chosen {
+            NSColor.labelColor.withAlphaComponent(0.08).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 4), xRadius: 10, yRadius: 10).fill()
+        }
+        let tint: NSColor = chosen ? .controlAccentColor : .labelColor
+        let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
+        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: tabTitle)?.withSymbolConfiguration(config) {
+            image.isTemplate = false
+            let side: CGFloat = 22
+            let iconRect = NSRect(x: (bounds.width - side) / 2, y: bounds.height - 10 - side, width: side, height: side)
+            image.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let star = marksRequired ? "* " : ""
+        let starAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.systemRed]
+        let textAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: tint]
+        let starSize = (star as NSString).size(withAttributes: starAttrs)
+        let textSize = (tabTitle as NSString).size(withAttributes: textAttrs)
+        var textX = (bounds.width - starSize.width - textSize.width) / 2
+        if marksRequired {
+            (star as NSString).draw(at: NSPoint(x: textX, y: 8), withAttributes: starAttrs)
+            textX += starSize.width
+        }
+        (tabTitle as NSString).draw(at: NSPoint(x: textX, y: 8), withAttributes: textAttrs)
+    }
+}
+
+// 点击菜单栏图标后打开的分区面板。
+final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate, NSTextViewDelegate {
     private struct Spec {
         let key: String
         let title: String
@@ -148,34 +446,30 @@ final class SettingsController: NSObject {
         let placeholder: String
         let multiline: Bool
     }
-    private var sections: [(title: String, hint: String, fields: [Spec])] { [
-        (
-            "Jev",
-            L("可选。开启后先判断是否需要润色；关闭后每次都调用润色接口。"),
-            [
-                Spec(key: SettingKey.jevURL, title: L("接口地址"), fallback: defaultJevURL, placeholder: defaultJevURL, multiline: false),
-                Spec(key: SettingKey.jevToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
-                Spec(key: SettingKey.jevModel, title: L("模型"), fallback: defaultJevModel, placeholder: defaultJevModel, multiline: false),
-                Spec(key: SettingKey.jevPrompt, title: L("判断规则提示词"), fallback: defaultJevPrompt, placeholder: "", multiline: true)
-            ]
-        ),
-        (
-            L("润色接口"),
-            L("填写兼容 Chat Completions 的接口地址；Base URL 会自动补全路径。额外参数填写 JSON 对象，stream 仅支持 false。"),
-            [
-                Spec(key: SettingKey.oaURL, title: L("接口地址"), fallback: "", placeholder: "https://api.example.com/v1", multiline: false),
-                Spec(key: SettingKey.oaToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
-                Spec(key: SettingKey.oaModel, title: L("模型"), fallback: "", placeholder: L("服务商提供的模型 ID"), multiline: false),
-                Spec(key: SettingKey.oaExtraParameters, title: L("额外请求参数（JSON 对象）"), fallback: "", placeholder: "", multiline: true),
-                Spec(key: SettingKey.oaPrompt, title: L("润色规则提示词"), fallback: defaultOAPrompt, placeholder: "", multiline: true)
-            ]
-        )
+    private var jevSpecs: [Spec] { [
+        Spec(key: SettingKey.jevURL, title: L("接口地址"), fallback: defaultJevURL, placeholder: defaultJevURL, multiline: false),
+        Spec(key: SettingKey.jevToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
+        Spec(key: SettingKey.jevModel, title: L("模型"), fallback: defaultJevModel, placeholder: defaultJevModel, multiline: false)
     ] }
+    private var openAISpecs: [Spec] { [
+        Spec(key: SettingKey.oaURL, title: L("接口地址"), fallback: "", placeholder: "https://api.example.com/v1", multiline: false),
+        Spec(key: SettingKey.oaToken, title: "Token", fallback: "", placeholder: "Authorization: Bearer", multiline: false),
+        Spec(key: SettingKey.oaModel, title: L("模型"), fallback: "", placeholder: L("服务商提供的模型 ID"), multiline: false),
+        Spec(key: SettingKey.oaExtraParameters, title: L("额外请求参数（JSON 对象）"), fallback: "", placeholder: "", multiline: true)
+    ] }
+    private var personaSpecs: [Spec] { [
+        Spec(key: SettingKey.jevPrompt, title: L("判断提示词"), fallback: defaultJevPrompt, placeholder: "", multiline: true),
+        Spec(key: SettingKey.oaPrompt, title: L("润色提示词"), fallback: defaultOAPrompt, placeholder: "", multiline: true)
+    ] }
+    private var fieldSpecs: [Spec] { jevSpecs + openAISpecs + personaSpecs }
     var onImported: (() -> Void)?
     private var window: NSWindow?
     private var fields: [String: NSTextField] = [:]
     private var editors: [String: NSTextView] = [:]
-    private var targetRows = NSStackView()
+    private var appDropView: ApplicationDropView?
+    private var targetDetail = NSStackView()
+    private var focusedBundleID: String?
+    private var interceptHover: InterceptHoverView?
     private var targetApplications: [TargetApplication] = []
     private var componentChoiceIndex: [ObjectIdentifier: (Int, Int)] = [:]
     private var jevCheckbox: NSButton?
@@ -190,6 +484,21 @@ final class SettingsController: NSObject {
     private var commandTestRunner: CommandRunner?
     private var commandTestToken: UUID?
     private var tabView: NSTabView?
+    private var tabButtons: [PanelTabButton] = []
+    private var interceptCheckbox: NSButton?
+    private var axStatusLabel: NSTextField?
+    private var listenStatusLabel: NSTextField?
+    private var axGrantButton: NSButton?
+    private var listenGrantButton: NSButton?
+    private var loginHint: NSTextField?
+    private var runtimeRunning = false
+    private var runtimeStatus = ""
+    private var extraErrorLabel: NSTextField?
+    private var applyingForm = false
+    var onQuit: (() -> Void)?
+    var onIntercept: ((Bool) -> Void)?
+    var onConfigurationChanged: (() -> Void)?
+    var historyContent: (() -> NSView)?
 
     func show() {
         let opening = window?.isVisible != true
@@ -204,72 +513,282 @@ final class SettingsController: NSObject {
 
     private func makeWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 660),
-            styleMask: [.titled, .closable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 680),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = L("设置")
-        window.minSize = NSSize(width: 460, height: 420)
+        window.title = L("通用")
+        window.minSize = NSSize(width: 680, height: 560)
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
 
+        let pages: [(String, String, String, Bool, NSView)] = [
+            ("general", L("通用"), "slider.horizontal.3", true, makeGeneralView()),
+            ("jev", "Jev", "bolt", false, makeJevView()),
+            ("persona", L("人设"), "person", false, makePersonaView()),
+            ("commands", L("指令"), "terminal", false, makeCommandsView()),
+            ("history", L("历史记录"), "clock", false, historyContent?() ?? NSView())
+        ]
+        tabButtons = pages.map { id, title, symbol, required, _ in
+            let button = PanelTabButton(identifier: id, title: title, symbol: symbol)
+            button.marksRequired = required
+            button.clickTarget = self
+            button.clickAction = #selector(selectTab(_:))
+            return button
+        }
+        let tabBar = NSStackView(views: tabButtons)
+        tabBar.orientation = .horizontal
+        tabBar.distribution = .fillEqually
+        tabBar.spacing = 4
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        tabBar.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
+
+        let tabs = NSTabView()
+        tabView = tabs
+        tabs.delegate = self
+        tabs.tabViewType = .noTabsNoBorder
+        tabs.drawsBackground = false
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        for (id, title, _, _, view) in pages {
+            let item = NSTabViewItem(identifier: id)
+            item.label = title
+            item.view = view
+            tabs.addTabViewItem(item)
+        }
+        tabs.selectTabViewItem(withIdentifier: "general")
+        for button in tabButtons { button.chosen = button.tabIdentifier == "general" }
+
+        let line = makeSeparator()
+        line.translatesAutoresizingMaskIntoConstraints = false
+        let footerLine = makeSeparator()
+        footerLine.translatesAutoresizingMaskIntoConstraints = false
+        let importButton = NSButton(title: L("导入"), target: self, action: #selector(importFromFile))
+        let exportButton = NSButton(title: L("导出"), target: self, action: #selector(exportToFile))
+        let fileButtons = NSStackView(views: [importButton, exportButton])
+        fileButtons.orientation = .horizontal
+        fileButtons.spacing = 8
+        fileButtons.translatesAutoresizingMaskIntoConstraints = false
+        let quit = NSButton(title: L("退出"), target: self, action: #selector(quitApp))
+        quit.bezelStyle = .rounded
+        quit.translatesAutoresizingMaskIntoConstraints = false
+        let intercept = NSButton(checkboxWithTitle: L("开启拦截"), target: self, action: #selector(interceptToggled(_:)))
+        interceptCheckbox = intercept
+        let interceptHolder = InterceptHoverView()
+        interceptHover = interceptHolder
+        intercept.translatesAutoresizingMaskIntoConstraints = false
+        interceptHolder.translatesAutoresizingMaskIntoConstraints = false
+        interceptHolder.addSubview(intercept)
+        NSLayoutConstraint.activate([
+            intercept.leadingAnchor.constraint(equalTo: interceptHolder.leadingAnchor, constant: 2),
+            intercept.trailingAnchor.constraint(equalTo: interceptHolder.trailingAnchor, constant: -2),
+            intercept.topAnchor.constraint(equalTo: interceptHolder.topAnchor, constant: 2),
+            intercept.bottomAnchor.constraint(equalTo: interceptHolder.bottomAnchor, constant: -2)
+        ])
+
         let content = NSView()
+        content.addSubview(tabBar)
+        content.addSubview(line)
+        content.addSubview(tabs)
+        content.addSubview(footerLine)
+        content.addSubview(fileButtons)
+        content.addSubview(interceptHolder)
+        content.addSubview(quit)
+        NSLayoutConstraint.activate([
+            tabBar.topAnchor.constraint(equalTo: content.topAnchor, constant: 4),
+            tabBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            tabBar.heightAnchor.constraint(equalToConstant: 72),
+            line.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+            line.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            tabs.topAnchor.constraint(equalTo: line.bottomAnchor),
+            tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            footerLine.topAnchor.constraint(equalTo: tabs.bottomAnchor),
+            footerLine.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            footerLine.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            fileButtons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            fileButtons.centerYAnchor.constraint(equalTo: quit.centerYAnchor),
+            fileButtons.trailingAnchor.constraint(lessThanOrEqualTo: interceptHolder.leadingAnchor, constant: -12),
+            interceptHolder.centerYAnchor.constraint(equalTo: quit.centerYAnchor),
+            interceptHolder.trailingAnchor.constraint(equalTo: quit.leadingAnchor, constant: -12),
+            quit.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            quit.topAnchor.constraint(equalTo: footerLine.bottomAnchor, constant: 12),
+            quit.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)
+        ])
+        let flexible = NSLayoutConstraint.Priority(rawValue: 1)
+        content.setContentHuggingPriority(flexible, for: .horizontal)
+        content.setContentHuggingPriority(flexible, for: .vertical)
+        content.setContentCompressionResistancePriority(flexible, for: .horizontal)
+        content.setContentCompressionResistancePriority(flexible, for: .vertical)
+        window.contentView = content
+        window.setContentSize(NSSize(width: 760, height: 680))
+        window.center()
+        refreshReadiness()
+        return window
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        let id = tabViewItem?.identifier as? String ?? "general"
+        window?.title = tabViewItem?.label ?? L("通用")
+        for button in tabButtons { button.chosen = button.tabIdentifier == id }
+        refreshReadiness()
+    }
+    @objc private func selectTab(_ sender: PanelTabButton) {
+        tabView?.selectTabViewItem(withIdentifier: sender.tabIdentifier)
+    }
+    private func makeGeneralView() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 18
+        fill(formRow(L("权限"), makePermissionControls(), top: true, required: true), in: stack)
+        fill(formRow("OpenAI", makeOpenAIControls(), top: true, required: true), in: stack)
+        fill(formRow(L("目标应用"), makeTargetControls(), top: true, required: true), in: stack)
+        fill(formRow(L("开机启动"), makeLoginControls(), top: true), in: stack)
+        let picker = NSPopUpButton()
+        picker.addItems(withTitles: [L("跟随系统"), "简体中文", "English"])
+        picker.target = self
+        picker.action = #selector(languageChanged)
+        languagePicker = picker
+        fill(formRow(L("界面语言"), picker), in: stack)
+        return wrapScroll(stack)
+    }
+    private func makePermissionControls() -> NSView {
+        let axStatus = NSTextField(labelWithString: "")
+        axStatus.font = .systemFont(ofSize: 13)
+        axStatusLabel = axStatus
+        let axButton = NSButton(title: L("授予"), target: self, action: #selector(grantAccessibility))
+        axButton.bezelStyle = .rounded
+        axGrantButton = axButton
+        let listenStatus = NSTextField(labelWithString: "")
+        listenStatus.font = .systemFont(ofSize: 13)
+        listenStatusLabel = listenStatus
+        let listenButton = NSButton(title: L("授予"), target: self, action: #selector(grantInputMonitoring))
+        listenButton.bezelStyle = .rounded
+        listenGrantButton = listenButton
+        let axRow = NSStackView(views: [axStatus, axButton])
+        axRow.orientation = .horizontal
+        axRow.alignment = .centerY
+        axRow.spacing = 8
+        let listenRow = NSStackView(views: [listenStatus, listenButton])
+        listenRow.orientation = .horizontal
+        listenRow.alignment = .centerY
+        listenRow.spacing = 8
+        let group = NSStackView(views: [axRow, listenRow])
+        group.orientation = .vertical
+        group.alignment = .leading
+        group.spacing = 8
+        return group
+    }
+    private func makeOpenAIControls() -> NSView {
+        let hint = NSTextField(wrappingLabelWithString: L("填写接口地址、Token 和模型后，才能开启拦截。"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 460
+        let error = NSTextField(wrappingLabelWithString: "")
+        error.font = .systemFont(ofSize: 11)
+        error.textColor = .systemRed
+        error.preferredMaxLayoutWidth = 460
+        error.isHidden = true
+        extraErrorLabel = error
+        let block = NSStackView()
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 10
+        block.detachesHiddenViews = true
+        fill(hint, in: block)
+        for spec in openAISpecs { fill(makeField(spec), in: block) }
+        fill(error, in: block)
+        return block
+    }
+    private func makeTargetControls() -> NSView {
+        let hint = NSTextField(wrappingLabelWithString: L("只在这些应用里处理回车。点选一个应用后，可以修改它的劫持范围。默认全部劫持；改成部分劫持后，每个输入框第一次回车会询问处理方式。"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 460
+        let drop = ApplicationDropView()
+        drop.onDrop = { [weak self] urls in self?.addApplications(urls) }
+        appDropView = drop
+        let open = NSButton(title: L("打开应用程序文件夹"), target: self, action: #selector(openApplicationsFolder))
+        open.bezelStyle = .rounded
+        let detail = NSStackView()
+        detail.orientation = .vertical
+        detail.alignment = .leading
+        detail.spacing = 6
+        detail.detachesHiddenViews = true
+        detail.isHidden = true
+        targetDetail = detail
+        let block = NSStackView()
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 8
+        fill(hint, in: block)
+        fill(drop, in: block)
+        block.addArrangedSubview(open)
+        fill(detail, in: block)
+        return block
+    }
+    @objc private func openApplicationsFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
+    }
+    private func makeLoginControls() -> NSView {
+        let checkbox = NSButton(checkboxWithTitle: L("登录时启动"), target: self, action: #selector(loginToggled(_:)))
+        loginCheckbox = checkbox
+        let hint = NSTextField(wrappingLabelWithString: "")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 460
+        loginHint = hint
+        let block = NSStackView(views: [checkbox, hint])
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 4
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        hint.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
+        return block
+    }
+    private func makeJevView() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        fill(makeHeader("Jev", L("可选。开启后先判断是否需要润色；关闭后每次都调用润色接口。")), in: stack)
+        let checkbox = NSButton(checkboxWithTitle: L("启用 Jev 判断"), target: self, action: #selector(jevChanged))
+        jevCheckbox = checkbox
+        fill(checkbox, in: stack)
+        for spec in jevSpecs { fill(makeField(spec), in: stack) }
+        return wrapScroll(stack)
+    }
+    private func makePersonaView() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        fill(makeHeader(L("人设"), L("判断提示词决定要不要润色；润色提示词只改写原句。修改后，下一次回车生效。")), in: stack)
+        for spec in personaSpecs { fill(makeField(spec), in: stack) }
+        return wrapScroll(stack)
+    }
+    private func wrapScroll(_ stack: NSStackView) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 16
+        scroll.autoresizingMask = [.width, .height]
         stack.translatesAutoresizingMaskIntoConstraints = false
-        fill(makeHeader(L("目标应用"), L("只在列表中的应用里处理回车。每个应用默认全部劫持；改成部分劫持后，每个输入框第一次回车会询问处理方式，并可在这里修改。")), in: stack)
-        let drop = ApplicationDropView()
-        drop.onDrop = { [weak self] urls in self?.addApplications(urls) }
-        fill(drop, in: stack)
-        drop.heightAnchor.constraint(equalToConstant: 64).isActive = true
-        targetRows.orientation = .vertical
-        targetRows.alignment = .leading
-        targetRows.spacing = 6
-        fill(targetRows, in: stack)
-        for (index, section) in sections.enumerated() {
-            fill(makeSeparator(), in: stack)
-            let block = NSStackView()
-            block.orientation = .vertical
-            block.alignment = .leading
-            block.spacing = 10
-            fill(makeHeader(section.title, section.hint), in: block)
-            if index == 0 {
-                let checkbox = NSButton(checkboxWithTitle: L("启用 Jev 判断"), target: nil, action: nil)
-                jevCheckbox = checkbox
-                fill(checkbox, in: block)
-            }
-            for spec in section.fields { fill(makeField(spec), in: block) }
-            fill(block, in: stack)
-        }
-
-        fill(makeSeparator(), in: stack)
-        fill(makeHeader(L("界面语言"), L("保存后生效；跟随系统时自动判断语言。")), in: stack)
-        let picker = NSPopUpButton()
-        picker.addItems(withTitles: [L("跟随系统"), "简体中文", "English"])
-        languagePicker = picker
-        fill(picker, in: stack)
-
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16)
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 22),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 28),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -22)
         ])
         scroll.documentView = container
-        container.translatesAutoresizingMaskIntoConstraints = false
         let clip = scroll.contentView
         let docBottom = container.bottomAnchor.constraint(equalTo: clip.bottomAnchor)
         docBottom.priority = .defaultLow
@@ -280,62 +799,95 @@ final class SettingsController: NSObject {
             container.widthAnchor.constraint(equalTo: clip.widthAnchor),
             docBottom
         ])
-
-        let line = makeSeparator()
-        line.translatesAutoresizingMaskIntoConstraints = false
-        let exportButton = NSButton(title: L("导出"), target: self, action: #selector(exportToFile))
-        let importButton = NSButton(title: L("导入"), target: self, action: #selector(importFromFile))
-        let fileButtons = NSStackView(views: [exportButton, importButton])
-        fileButtons.orientation = .horizontal
-        fileButtons.spacing = 8
-        fileButtons.translatesAutoresizingMaskIntoConstraints = false
-        let cancel = NSButton(title: L("取消"), target: self, action: #selector(cancel))
-        cancel.keyEquivalent = "\u{1b}"
-        let save = NSButton(title: L("保存"), target: self, action: #selector(save))
-        let buttons = NSStackView(views: [cancel, save])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-
-        let tabs = NSTabView()
-        tabView = tabs
-        tabs.translatesAutoresizingMaskIntoConstraints = false
-        let generalTab = NSTabViewItem(identifier: "general")
-        generalTab.label = L("基本设置")
-        generalTab.view = scroll
-        tabs.addTabViewItem(generalTab)
-        let commandTab = NSTabViewItem(identifier: "commands")
-        commandTab.label = L("指令配置")
-        commandTab.view = makeCommandsView()
-        tabs.addTabViewItem(commandTab)
-        tabs.selectTabViewItem(generalTab)
-
-        content.addSubview(tabs)
-        content.addSubview(line)
-        content.addSubview(fileButtons)
-        content.addSubview(buttons)
-        NSLayoutConstraint.activate([
-            tabs.topAnchor.constraint(equalTo: content.topAnchor),
-            tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            line.topAnchor.constraint(equalTo: tabs.bottomAnchor),
-            line.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            line.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            fileButtons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            fileButtons.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
-            buttons.topAnchor.constraint(equalTo: line.bottomAnchor, constant: 12),
-            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)
-        ])
-        window.contentView = content
-        window.center()
-        return window
+        return scroll
     }
+    private func formRow(_ title: String, _ content: NSView, top: Bool = false, required: Bool = false) -> NSView {
+        let label = NSTextField(labelWithString: "")
+        label.alignment = .right
+        if required {
+            let text = NSMutableAttributedString(string: "* ", attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.systemRed
+            ])
+            text.append(NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor
+            ]))
+            label.attributedStringValue = text
+        } else {
+            label.stringValue = title
+            label.font = .systemFont(ofSize: 13)
+        }
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 124).isActive = true
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        content.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        content.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [label, content])
+        row.orientation = .horizontal
+        row.alignment = top ? .top : .centerY
+        row.spacing = 16
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.widthAnchor.constraint(equalTo: row.widthAnchor, constant: -140).isActive = true
+        return row
+    }
+    func applyRuntime(running: Bool, status: String) {
+        runtimeRunning = running
+        runtimeStatus = status
+        refreshReadiness()
+    }
+    func refreshReadiness() {
+        let axGranted = AXIsProcessTrusted()
+        let listenGranted = CGPreflightListenEventAccess()
+        axStatusLabel?.stringValue = L("辅助功能：%1$@", axGranted ? L("已授权") : L("未授权"))
+        axStatusLabel?.textColor = axGranted ? .labelColor : .secondaryLabelColor
+        axGrantButton?.isEnabled = !axGranted
+        listenStatusLabel?.stringValue = L("输入监控：%1$@", listenGranted ? L("已授权") : L("未授权"))
+        listenStatusLabel?.textColor = listenGranted ? .labelColor : .secondaryLabelColor
+        listenGrantButton?.isEnabled = !listenGranted
+        syncLoginCheckbox()
+        let openAIReady = savedOpenAIConfigurationReady()
+        var missing: [String] = []
+        if !axGranted { missing.append(L("辅助功能")) }
+        if !listenGranted { missing.append(L("输入监控")) }
+        if !openAIReady { missing.append(L("OpenAI 配置")) }
+        if targetApplications.isEmpty { missing.append(L("目标应用")) }
+        let ready = missing.isEmpty
+        interceptCheckbox?.isEnabled = runtimeRunning || ready
+        interceptCheckbox?.state = runtimeRunning ? .on : .off
+        let reason: String?
+        if ready || runtimeRunning {
+            reason = nil
+        } else if !openAIReady && missing.count == 1 {
+            reason = L("请先填写 OpenAI 的接口地址、Token 和模型")
+        } else {
+            reason = L("开启拦截前，请先完成：%1$@", missing.joined(separator: L("项分隔")))
+        }
+        interceptHover?.showReason(reason)
+    }
+    @objc private func grantAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        refreshReadiness()
+    }
+    @objc private func grantInputMonitoring() {
+        _ = CGRequestListenEventAccess()
+        refreshReadiness()
+    }
+    @objc private func interceptToggled(_ sender: NSButton) {
+        onIntercept?(sender.state == .on)
+    }
+    @objc private func loginToggled(_ sender: NSButton) {
+        _ = applyLoginPreference()
+    }
+    @objc private func quitApp() { onQuit?() }
 
     private func makeCommandsView() -> NSView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
+        scroll.autoresizingMask = [.width, .height]
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -482,6 +1034,7 @@ final class SettingsController: NSObject {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let pattern = NSTextField(string: rule.pattern)
         pattern.placeholderString = L("正则表达式，例如 ^#")
+        pattern.delegate = self
         let script = NSTextView()
         script.isRichText = false
         script.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -490,6 +1043,7 @@ final class SettingsController: NSObject {
         script.autoresizingMask = [.width]
         script.textContainer?.widthTracksTextView = true
         script.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        script.delegate = self
         script.string = rule.script
         let scriptScroll = NSScrollView()
         scriptScroll.hasVerticalScroller = true
@@ -513,6 +1067,7 @@ final class SettingsController: NSObject {
         row.widthAnchor.constraint(equalTo: commandRows.widthAnchor).isActive = true
         commandFields.append((pattern, script))
         updatePriorityLabels()
+        commitForm()
     }
     private func dragCommand(_ row: NSView, toY y: CGFloat) {
         var steps = 0
@@ -542,6 +1097,7 @@ final class SettingsController: NSObject {
         commandRows.insertArrangedSubview(row, at: to)
         reorder(&commandFields, from: from, to: to)
         updatePriorityLabels()
+        commitForm()
     }
     private func updatePriorityLabels() {
         for (index, row) in commandRows.arrangedSubviews.enumerated() {
@@ -555,6 +1111,7 @@ final class SettingsController: NSObject {
         row.removeFromSuperview()
         commandFields.remove(at: index)
         updatePriorityLabels()
+        commitForm()
     }
     private func commandRow(containing view: NSView) -> NSView? {
         var current: NSView? = view
@@ -616,16 +1173,19 @@ final class SettingsController: NSObject {
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             textView.textContainerInset = NSSize(width: 2, height: 4)
+            textView.delegate = self
             scroll.documentView = textView
             editors[spec.key] = textView
             group.addArrangedSubview(scroll)
             scroll.translatesAutoresizingMaskIntoConstraints = false
             scroll.widthAnchor.constraint(equalTo: group.widthAnchor).isActive = true
-            scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+            let tall = spec.key == SettingKey.jevPrompt || spec.key == SettingKey.oaPrompt
+            scroll.heightAnchor.constraint(equalToConstant: tall ? 160 : 88).isActive = true
         } else {
             let field = NSTextField()
             field.font = .systemFont(ofSize: 13)
             field.placeholderString = spec.placeholder
+            field.delegate = self
             fields[spec.key] = field
             group.addArrangedSubview(field)
             field.translatesAutoresizingMaskIntoConstraints = false
@@ -636,7 +1196,88 @@ final class SettingsController: NSObject {
     @objc private func openLoginSettings() {
         if #available(macOS 13.0, *) { SMAppService.openSystemSettingsLoginItems() }
     }
+    private func syncLoginCheckbox() {
+        if #available(macOS 13.0, *) {
+            let status = SMAppService.mainApp.status
+            loginCheckbox?.isEnabled = true
+            loginCheckbox?.state = (status == .enabled || status == .requiresApproval) ? .on : .off
+            loginHint?.stringValue = status == .requiresApproval
+                ? L("请在系统设置的登录项中允许 Hola 自启动。")
+                : L("开启后，登录 macOS 时自动打开。")
+        } else {
+            loginCheckbox?.isEnabled = false
+            loginCheckbox?.state = .off
+            loginHint?.stringValue = L("macOS 12 请在系统偏好设置 → 用户与群组 → 登录项中手动添加 Hola。")
+        }
+    }
+    @discardableResult
+    private func applyLoginPreference() -> Bool {
+        guard #available(macOS 13.0, *) else { return true }
+        let service = SMAppService.mainApp
+        let wantsLogin = loginCheckbox?.state == .on
+        var justRegistered = false
+        do {
+            if wantsLogin && service.status != .enabled && service.status != .requiresApproval {
+                try service.register()
+                justRegistered = true
+            } else if !wantsLogin && (service.status == .enabled || service.status == .requiresApproval) {
+                try service.unregister()
+            }
+        } catch {
+            showNotice(L("开机自启动设置失败"), error.localizedDescription)
+            syncLoginCheckbox()
+            return false
+        }
+        if justRegistered && service.status == .requiresApproval {
+            showNotice(L("需要允许登录项"), L("请在系统设置的登录项中允许 Hola 自启动。"))
+            SMAppService.openSystemSettingsLoginItems()
+        }
+        syncLoginCheckbox()
+        return true
+    }
+    func controlTextDidChange(_ notification: Notification) { commitForm() }
+    func textDidChange(_ notification: Notification) { commitForm() }
+    @objc private func languageChanged() {
+        let language = selectedLanguage()
+        guard language != displayedLanguage else { return }
+        setSetting(LanguagePreference.key, language)
+        reloadLocalization()
+        loadValues()
+    }
+    @objc private func jevChanged() {
+        setSetting(SettingKey.jevEnabled, jevCheckbox?.state == .on ? "true" : "false")
+    }
+    private func commitForm() {
+        guard !applyingForm, window != nil else { return }
+        for (key, field) in fields {
+            setSetting(key, field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        for (key, editor) in editors where key != SettingKey.oaExtraParameters {
+            setSetting(key, editor.string)
+        }
+        if let editor = editors[SettingKey.oaExtraParameters] {
+            do {
+                _ = try extraRequestParameters(editor.string)
+                setSetting(SettingKey.oaExtraParameters, editor.string)
+                extraErrorLabel?.stringValue = ""
+                extraErrorLabel?.isHidden = true
+            } catch {
+                extraErrorLabel?.stringValue = (error as? ProbeError)?.description ?? error.localizedDescription
+                extraErrorLabel?.isHidden = false
+            }
+        }
+        if let commands = try? currentCommands() {
+            setSetting(SettingKey.commands, encodeCommands(commands))
+        }
+        refreshReadiness()
+    }
+    private func persistTargets() {
+        setSetting(SettingKey.targets, targetSettingsValue(targetApplications))
+        onConfigurationChanged?()
+    }
     private func loadValues() {
+        applyingForm = true
+        defer { applyingForm = false }
         let language = setting(LanguagePreference.key, "system")
         if displayedLanguage != language {
             let oldWindow = window
@@ -644,7 +1285,6 @@ final class SettingsController: NSObject {
             let visible = oldWindow?.isVisible == true
             fields.removeAll()
             editors.removeAll()
-            targetRows = NSStackView()
             commandFields.removeAll()
             window = makeWindow()
             if let frame = frame { window?.setFrame(frame, display: true) }
@@ -653,10 +1293,6 @@ final class SettingsController: NSObject {
             displayedLanguage = language
         }
         languagePicker?.selectItem(at: LanguagePreference.values.firstIndex(of: language) ?? 0)
-        if #available(macOS 13.0, *) {
-            let status = SMAppService.mainApp.status
-            loginCheckbox?.state = (status == .enabled || status == .requiresApproval) ? .on : .off
-        }
         targetApplications = configuredTargets()
         renderTargets()
         jevCheckbox?.state = jevEnabled() ? .on : .off
@@ -666,59 +1302,15 @@ final class SettingsController: NSObject {
         for row in commandRows.arrangedSubviews { commandRows.removeArrangedSubview(row); row.removeFromSuperview() }
         commandFields.removeAll()
         for rule in (try? decodeCommands(setting(SettingKey.commands, "[]"))) ?? [] { appendCommand(rule) }
-        for section in sections {
-            for spec in section.fields {
-                let value = setting(spec.key, spec.fallback)
-                if spec.multiline {
-                    editors[spec.key]?.string = value
-                } else {
-                    fields[spec.key]?.stringValue = value
-                }
+        for spec in fieldSpecs {
+            let value = setting(spec.key, spec.fallback)
+            if spec.multiline {
+                editors[spec.key]?.string = value
+            } else {
+                fields[spec.key]?.stringValue = value
             }
         }
-    }
-    @objc private func cancel() { window?.close() }
-    @objc private func save() {
-        window?.makeFirstResponder(nil)
-        let commands: [CommandRule]
-        do {
-            _ = try extraRequestParameters(editors[SettingKey.oaExtraParameters]?.string ?? "")
-            commands = try currentCommands()
-        } catch {
-            showNotice(L("额外请求参数无效"), (error as? ProbeError)?.description ?? error.localizedDescription)
-            return
-        }
-        if #available(macOS 13.0, *) {
-            let service = SMAppService.mainApp
-            let wantsLogin = loginCheckbox?.state == .on
-            do {
-                if wantsLogin && service.status != .enabled && service.status != .requiresApproval {
-                    try service.register()
-                } else if !wantsLogin && (service.status == .enabled || service.status == .requiresApproval) {
-                    try service.unregister()
-                }
-            } catch {
-                showNotice(L("开机自启动设置失败"), error.localizedDescription)
-                return
-            }
-            if wantsLogin && service.status == .requiresApproval {
-                showNotice(L("需要允许登录项"), L("请在系统设置的登录项中允许 Hola 自启动。"))
-                SMAppService.openSystemSettingsLoginItems()
-            }
-        }
-        setSetting(LanguagePreference.key, selectedLanguage())
-        reloadLocalization()
-        setSetting(SettingKey.targets, targetSettingsValue(targetApplications))
-        setSetting(SettingKey.jevEnabled, jevCheckbox?.state == .on ? "true" : "false")
-        for (key, field) in fields {
-            setSetting(key, field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        for (key, editor) in editors {
-            setSetting(key, editor.string)
-        }
-        setSetting(SettingKey.commands, encodeCommands(commands))
-        window?.close()
-        onImported?()
+        refreshReadiness()
     }
     @objc func exportToFile() {
         NSApp.activate(ignoringOtherApps: true)
@@ -775,15 +1367,13 @@ final class SettingsController: NSObject {
         values[LanguagePreference.key] = useForm ? selectedLanguage() : setting(LanguagePreference.key, "system")
         values[SettingKey.targets] = useForm ? targetSettingsValue(targetApplications) : setting(SettingKey.targets, "[]")
         values[SettingKey.jevEnabled] = useForm ? (jevCheckbox?.state == .on ? "true" : "false") : setting(SettingKey.jevEnabled, "false")
-        for section in sections {
-            for spec in section.fields {
-                if useForm, spec.multiline, let editor = editors[spec.key] {
-                    values[spec.key] = editor.string
-                } else if useForm, let field = fields[spec.key] {
-                    values[spec.key] = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                } else {
-                    values[spec.key] = setting(spec.key, spec.fallback)
-                }
+        for spec in fieldSpecs {
+            if useForm, spec.multiline, let editor = editors[spec.key] {
+                values[spec.key] = editor.string
+            } else if useForm, let field = fields[spec.key] {
+                values[spec.key] = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                values[spec.key] = setting(spec.key, spec.fallback)
             }
         }
         values[SettingKey.commands] = useForm ? encodeCommands(try currentCommands()) : setting(SettingKey.commands, "[]")
@@ -800,6 +1390,7 @@ final class SettingsController: NSObject {
     }
     private func addApplications(_ urls: [URL]) {
         var rejected: [String] = []
+        let before = targetApplications.count
         for url in urls {
             let resolved = url.resolvingSymlinksInPath()
             guard resolved.pathExtension.lowercased() == "app",
@@ -816,26 +1407,46 @@ final class SettingsController: NSObject {
             }
         }
         renderTargets()
+        if targetApplications.count != before { persistTargets() }
         if !rejected.isEmpty { showNotice(L("无法添加应用"), rejected.joined(separator: "、")) }
     }
     private func renderTargets() {
         componentChoiceIndex.removeAll()
-        targetRows.arrangedSubviews.forEach { targetRows.removeArrangedSubview($0); $0.removeFromSuperview() }
-        if targetApplications.isEmpty {
-            fill(NSTextField(labelWithString: L("尚未添加应用")), in: targetRows)
-            return
+        guard let drop = appDropView else { return }
+        targetDetail.arrangedSubviews.forEach { targetDetail.removeArrangedSubview($0); $0.removeFromSuperview() }
+        if let focused = focusedBundleID, !targetApplications.contains(where: { $0.bundleID == focused }) {
+            focusedBundleID = nil
         }
-        for (index, target) in targetApplications.enumerated() {
-            fill(makeTargetBlock(target, index: index), in: targetRows)
+        let hasApps = !targetApplications.isEmpty
+        drop.setShowingApps(hasApps)
+        if !hasApps { drop.setTiles([]) }
+        if hasApps {
+            let cells: [NSView] = targetApplications.map { app in
+                let tile = AppTileView(
+                    image: NSWorkspace.shared.icon(forFile: app.path),
+                    title: app.name,
+                    chosen: app.bundleID == focusedBundleID
+                )
+                tile.onSelect = { [weak self] in
+                    self?.focusedBundleID = app.bundleID
+                    self?.renderTargets()
+                }
+                return tile
+            }
+            drop.setTiles(cells)
         }
+        if let index = targetApplications.firstIndex(where: { $0.bundleID == focusedBundleID }) {
+            targetDetail.isHidden = false
+            fill(makeTargetBlock(targetApplications[index], index: index), in: targetDetail)
+            targetDetail.layoutSubtreeIfNeeded()
+            targetDetail.scrollToVisible(targetDetail.bounds)
+        } else {
+            targetDetail.isHidden = true
+        }
+        refreshReadiness()
     }
     private func makeTargetBlock(_ target: TargetApplication, index: Int) -> NSView {
-        let icon = NSImageView(image: NSWorkspace.shared.icon(forFile: target.path))
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        let title = NSTextField(labelWithString: "\(target.name)  ·  \(target.bundleID)")
+        let title = NSTextField(labelWithString: target.name)
         title.lineBreakMode = .byTruncatingMiddle
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -851,7 +1462,7 @@ final class SettingsController: NSObject {
         let remove = NSButton(title: L("移除"), target: self, action: #selector(removeApplication(_:)))
         remove.tag = index
         remove.setContentHuggingPriority(.required, for: .horizontal)
-        let header = NSStackView(views: [icon, title, scope, remove])
+        let header = NSStackView(views: [title, scope, remove])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
@@ -878,10 +1489,26 @@ final class SettingsController: NSObject {
         caption.textColor = .secondaryLabelColor
         block.addArrangedSubview(caption)
         for (componentIndex, component) in target.components.enumerated() {
-            let name = NSTextField(labelWithString: component.label.isEmpty ? component.id : component.label)
-            name.lineBreakMode = .byTruncatingMiddle
-            name.font = .systemFont(ofSize: 12)
-            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let display = componentPermissionDisplay(component)
+            let tree = NSTextField(labelWithString: display.tree)
+            tree.lineBreakMode = .byTruncatingMiddle
+            tree.font = .systemFont(ofSize: 12)
+            tree.toolTip = component.id
+            tree.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let text = NSStackView()
+            text.orientation = .vertical
+            text.alignment = .leading
+            text.spacing = 1
+            text.addArrangedSubview(tree)
+            if !display.detail.isEmpty {
+                let detail = NSTextField(labelWithString: display.detail)
+                detail.lineBreakMode = .byTruncatingMiddle
+                detail.font = .systemFont(ofSize: 11)
+                detail.textColor = .secondaryLabelColor
+                detail.toolTip = component.id
+                detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                text.addArrangedSubview(detail)
+            }
             let choice = NSPopUpButton()
             choice.controlSize = .small
             choice.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -894,7 +1521,7 @@ final class SettingsController: NSObject {
             let indent = NSView()
             indent.translatesAutoresizingMaskIntoConstraints = false
             indent.widthAnchor.constraint(equalToConstant: 28).isActive = true
-            let row = NSStackView(views: [indent, name, choice])
+            let row = NSStackView(views: [indent, text, choice])
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 8
@@ -907,6 +1534,7 @@ final class SettingsController: NSObject {
     @objc private func changeHijackScope(_ sender: NSPopUpButton) {
         guard targetApplications.indices.contains(sender.tag) else { return }
         targetApplications[sender.tag].hijackScope = sender.indexOfSelectedItem == 1 ? .partial : .all
+        persistTargets()
         DispatchQueue.main.async { [weak self] in self?.renderTargets() }
     }
     @objc private func changeComponentDecision(_ sender: NSPopUpButton) {
@@ -922,11 +1550,14 @@ final class SettingsController: NSObject {
             targetApplications[appIndex].components.remove(at: componentIndex)
             DispatchQueue.main.async { [weak self] in self?.renderTargets() }
         }
+        persistTargets()
     }
     @objc private func removeApplication(_ sender: NSButton) {
         guard targetApplications.indices.contains(sender.tag) else { return }
+        if targetApplications[sender.tag].bundleID == focusedBundleID { focusedBundleID = nil }
         targetApplications.remove(at: sender.tag)
         renderTargets()
+        persistTargets()
     }
     private func showNotice(_ title: String, _ info: String) {
         let alert = NSAlert()
@@ -1163,7 +1794,6 @@ private func chatCompletionsURL(_ raw: String) -> String? {
 }
 
 final class HistoryController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    private var window: NSWindow?
     private var table: NSTableView?
     private var detail: NSTextView?
     private var countLabel: NSTextField?
@@ -1178,37 +1808,16 @@ final class HistoryController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         super.init()
         CallLog.shared.observe { [weak self] in self?.reload() }
     }
-    func show() {
-        if window == nil { window = makeWindow() }
+    func makeContentView() -> NSView {
+        let content = buildContent()
         reload()
         if table?.selectedRow ?? -1 < 0, !CallLog.shared.records.isEmpty {
             table?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         }
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        return content
     }
-    func refreshLanguage() {
-        guard let oldWindow = window else { return }
-        let visible = oldWindow.isVisible
-        window = makeWindow()
-        window?.setFrame(oldWindow.frame, display: true)
-        oldWindow.close()
-        reload()
-        if visible { window?.makeKeyAndOrderFront(nil) }
-    }
-    private func makeWindow() -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 620),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = L("调用历史")
-        window.minSize = NSSize(width: 760, height: 460)
-        window.isReleasedWhenClosed = false
-        window.hidesOnDeactivate = false
-        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-
+    func refreshLanguage() { reload() }
+    private func buildContent() -> NSView {
         let tableView = NSTableView()
         tableView.headerView = NSTableHeaderView()
         tableView.usesAlternatingRowBackgroundColors = true
@@ -1295,8 +1904,6 @@ final class HistoryController: NSObject, NSTableViewDataSource, NSTableViewDeleg
             empty.centerXAnchor.constraint(equalTo: tableScroll.centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: tableScroll.centerYAnchor)
         ])
-        window.contentView = content
-        window.center()
         self.table = tableView
         self.detail = textView
         self.countLabel = count
@@ -1304,7 +1911,8 @@ final class HistoryController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         self.copyButton = copy
         self.copyAllButton = copyAll
         self.clearButton = clear
-        return window
+        content.autoresizingMask = [.width, .height]
+        return content
     }
     private func reload() {
         guard let table = table else { return }
@@ -1461,7 +2069,7 @@ final class HistoryController: NSObject, NSTableViewDataSource, NSTableViewDeleg
     }
 }
 
-// 菜单栏图标右下角的结果点。点击穿透，不挡住状态栏菜单。
+// 菜单栏图标右下角的结果点。点击穿透，不挡住状态栏按钮。
 final class StatusDotView: NSView {
     var dotColor: NSColor = .systemGreen {
         didSet { needsDisplay = true }
@@ -1489,14 +2097,22 @@ private struct HijackPromptContext {
     let target: Target
 }
 
+private final class PromptButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 private final class HijackPromptPanel: NSObject {
     var onChoose: ((HijackPromptChoice) -> Void)?
     private let panel: NSPanel
     private let titleField = NSTextField(labelWithString: "")
+    private let hintField = NSTextField(wrappingLabelWithString: "")
+    private let denyButton = PromptButton(title: "", target: nil, action: nil)
+    private let allowButton = PromptButton(title: "", target: nil, action: nil)
+    private let dismissButton = PromptButton(title: "", target: nil, action: nil)
 
     override init() {
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 132),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 148),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1520,22 +2136,24 @@ private final class HijackPromptPanel: NSObject {
         titleField.font = .systemFont(ofSize: 13, weight: .semibold)
         titleField.lineBreakMode = .byTruncatingMiddle
         titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let hint = NSTextField(wrappingLabelWithString: L("选择会记住。放弃则不记住，下次仍会询问。"))
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 396
-        let deny = NSButton(title: L("不劫持"), target: self, action: #selector(chooseDeny))
-        let allow = NSButton(title: L("允许劫持"), target: self, action: #selector(chooseAllow))
-        let dismiss = NSButton(title: L("放弃"), target: self, action: #selector(chooseDismiss))
-        for button in [deny, allow, dismiss] {
+        hintField.font = .systemFont(ofSize: 11)
+        hintField.textColor = .secondaryLabelColor
+        hintField.preferredMaxLayoutWidth = 396
+        denyButton.target = self
+        denyButton.action = #selector(chooseDeny)
+        allowButton.target = self
+        allowButton.action = #selector(chooseAllow)
+        dismissButton.target = self
+        dismissButton.action = #selector(chooseDismiss)
+        for button in [denyButton, allowButton, dismissButton] {
             button.bezelStyle = .rounded
             button.controlSize = .regular
         }
-        let buttons = NSStackView(views: [deny, allow, dismiss])
+        let buttons = NSStackView(views: [denyButton, allowButton, dismissButton])
         buttons.orientation = .horizontal
         buttons.distribution = .fillEqually
         buttons.spacing = 8
-        let stack = NSStackView(views: [titleField, hint, buttons])
+        let stack = NSStackView(views: [titleField, hintField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -1547,7 +2165,7 @@ private final class HijackPromptPanel: NSObject {
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
             stack.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -12),
             titleField.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            hint.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            hintField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         panel.contentView = background
@@ -1555,7 +2173,11 @@ private final class HijackPromptPanel: NSObject {
 
     func show(title: String, near cocoa: CGRect?) {
         titleField.stringValue = title
-        let size = NSSize(width: 420, height: 132)
+        hintField.stringValue = L("这次回车已拦截，不会发送。不劫持和允许劫持会记住；放弃则下次仍会询问。")
+        denyButton.title = L("不劫持")
+        allowButton.title = L("允许劫持")
+        dismissButton.title = L("放弃")
+        let size = NSSize(width: 420, height: 148)
         let screen = NSScreen.screens.first { screen in
             guard let cocoa else { return false }
             return screen.frame.intersects(cocoa)
@@ -1582,18 +2204,30 @@ private final class HijackPromptPanel: NSObject {
     @objc private func chooseDismiss() { onChoose?(.dismiss) }
 }
 
-final class FieldActivityView: NSView {
+final class FieldBorderView: NSView {
+    enum Tone { case yellow, breathing, green }
+    var tone: Tone = .yellow
+    var breath: CGFloat = 1
+    var strokeInset: CGFloat = 3
+
     override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.systemBlue.withAlphaComponent(0.92).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
-        let text = L("润色中") as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: NSColor.white
-        ]
-        let size = text.size(withAttributes: attrs)
-        text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2), withAttributes: attrs)
+        let color: NSColor
+        switch tone {
+        case .yellow:
+            color = .systemYellow
+        case .green:
+            color = .systemGreen
+        case .breathing:
+            color = NSColor.systemYellow.withAlphaComponent(0.28 + 0.72 * breath)
+        }
+        color.setStroke()
+        let field = bounds.insetBy(dx: strokeInset, dy: strokeInset)
+        guard field.width > 1, field.height > 1 else { return }
+        let path = NSBezierPath(rect: field.insetBy(dx: 0.5, dy: 0.5))
+        path.lineWidth = 1
+        path.stroke()
     }
 }
 
@@ -1623,9 +2257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsController = SettingsController()
     private let historyController = HistoryController()
     private var statusItem: NSStatusItem!
-    private var toggleItem: NSMenuItem!
-    private var statusLineItem: NSMenuItem!
-    private var historyItem: NSMenuItem!
     private var running = false
     private var targetBundles = Set<String>()
     private var eventTap: CFMachPort?
@@ -1635,6 +2266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pipelineToken = UUID()
     private var activeRoundID: UUID?
     private var fieldHUD: NSPanel?
+    private var outlineElement: AXUIElement?
+    private var outlineTone: FieldBorderView.Tone?
+    private var outlineTimer: Timer?
+    private var outlineCheckedAt = Date.distantPast
+    private var outlineFrameTick = 0
     private var pendingFill: String?   // 上一次回填/确认的内容（回车二次校验的基准）
     private var pendingTarget: Target?
     private var passThroughReturn = false
@@ -1688,19 +2324,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay.autoresizingMask = [.width, .height]
             button.addSubview(overlay)
             badgeOverlay = overlay
+            button.target = self
+            button.action = #selector(openPanel)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        buildMenu()
+        settingsController.historyContent = { [weak self] in self?.historyController.makeContentView() ?? NSView() }
+        settingsController.onQuit = { NSApp.terminate(nil) }
+        settingsController.onIntercept = { [weak self] wants in
+            guard let self else { return }
+            if wants { self.startRunning(interactive: true) }
+            else { self.stopRunning() }
+        }
+        settingsController.onConfigurationChanged = { [weak self] in
+            self?.targetBundles = Set(configuredTargets().map(\.bundleID))
+        }
         settingsController.onImported = { [weak self] in
             guard let self = self else { return }
             self.targetBundles = Set(configuredTargets().map(\.bundleID))
-            self.buildMenu()
-            self.toggleItem.title = self.running ? L("停止") : L("开启")
-            self.refreshHistoryMenu()
             self.historyController.refreshLanguage()
             self.updateStatus(self.processing ? L("处理中，请稍候…") : (self.running ? L("运行中（%1$@ 个应用）", self.targetBundles.count) : L("未开启")))
         }
-        CallLog.shared.observe { [weak self] in self?.refreshHistoryMenu() }
-        refreshHistoryMenu()
         updateStatus(L("未开启"))
         DispatchQueue.main.async { [weak self] in self?.startRunning(interactive: false) }
         if CommandLine.arguments.contains("--show-settings") {
@@ -1708,6 +2351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func applicationWillTerminate(_ notification: Notification) { stopRunning() }
+    func applicationDidBecomeActive(_ notification: Notification) { settingsController.refreshReadiness() }
 
     private func installEditMenu() {
         let mainMenu = NSMenu()
@@ -1730,36 +2374,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    private func buildMenu() {
-        let menu = NSMenu()
-        statusLineItem = NSMenuItem(title: L("状态：未开启"), action: nil, keyEquivalent: "")
-        statusLineItem.isEnabled = false
-        menu.addItem(statusLineItem)
-        menu.addItem(.separator())
-        toggleItem = NSMenuItem(title: L("开启"), action: #selector(toggleRunning), keyEquivalent: "")
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-        let perm = NSMenuItem(title: L("请求辅助功能权限"), action: #selector(requestPermission), keyEquivalent: "")
-        perm.target = self
-        menu.addItem(perm)
-        menu.addItem(.separator())
-        addItem(menu, L("设置…"), #selector(showSettings))
-        historyItem = NSMenuItem(title: L("调用历史…"), action: #selector(showHistory), keyEquivalent: "")
-        historyItem.target = self
-        menu.addItem(historyItem)
-        menu.addItem(.separator())
-        addItem(menu, L("退出"), #selector(quit))
-        statusItem.menu = menu
-    }
-    private func addItem(_ menu: NSMenu, _ title: String, _ action: Selector) {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
-    }
+    @objc private func openPanel() { settingsController.show() }
 
     private func updateStatus(_ text: String) {
-        statusLineItem?.title = L("状态：%1$@", text)
         statusItem?.button?.toolTip = L("回车润色 · %1$@", text)
+        settingsController.applyRuntime(running: running, status: text)
     }
     private func setBusy(_ busy: Bool) {
         guard let button = statusItem?.button else { return }
@@ -1802,26 +2421,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         badgeOverlay?.needsLayout = true
     }
-    // 输入框本身通常不能改颜色。润色期间在它的可访问区域正中盖一个不挡点击的「润色中」，不改草稿。
-    private func showFieldActivity() {
-        guard let target = try? currentTarget(), let axRect = composerFrame(around: target.element) else { return }
+    // 输入框本身通常不能改颜色。在焦点输入框的可访问区域上盖一层不挡点击的描边。
+    private let outlinePad: CGFloat = 3
+    private func showFieldOutline(_ tone: FieldBorderView.Tone, around element: AXUIElement) {
+        outlineElement = element
+        outlineTone = tone
+        ensureOutlineTimer()
+        placeFieldOutline(around: element, tone: tone)
+    }
+    private func placeFieldOutline(around element: AXUIElement, tone: FieldBorderView.Tone) {
+        guard outlineFocusContains(element), let axRect = outlineFrame(around: element) else {
+            fieldHUD?.orderOut(nil)
+            return
+        }
         let cocoa = cocoaRect(fromAX: axRect)
         let panel = fieldHUD ?? makeFieldHUD()
-        let labelWidth = (L("润色中") as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
-        ]).width
-        let size = NSSize(width: max(72, ceil(labelWidth) + 24), height: 28)
-        let frame = NSRect(
-            x: cocoa.midX - size.width / 2,
-            y: cocoa.midY - size.height / 2,
-            width: size.width,
-            height: size.height
-        )
-        panel.setFrame(frame, display: true)
-        panel.orderFrontRegardless()
-        DispatchQueue.main.async { [weak panel] in
-            panel?.setFrame(frame, display: true)
+        let frame = cocoa.insetBy(dx: -outlinePad, dy: -outlinePad)
+        if let border = panel.contentView as? FieldBorderView {
+            border.tone = tone
+            border.strokeInset = outlinePad
+            border.frame = NSRect(origin: .zero, size: frame.size)
+            border.needsDisplay = true
         }
+        panel.setFrame(frame, display: true)
+        if !panel.isVisible { panel.orderFrontRegardless() }
+    }
+    private func hideFieldOutline() {
+        outlineTimer?.invalidate()
+        outlineTimer = nil
+        outlineElement = nil
+        outlineTone = nil
+        outlineFrameTick = 0
+        fieldHUD?.orderOut(nil)
+    }
+    private func ensureOutlineTimer() {
+        guard outlineTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.tickFieldOutline()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        outlineTimer = timer
+    }
+    private func tickFieldOutline() {
+        guard let tone = outlineTone, let element = outlineElement else {
+            hideFieldOutline()
+            return
+        }
+        outlineFrameTick += 1
+        if outlineFrameTick % 3 == 0 {
+            placeFieldOutline(around: element, tone: tone)
+        }
+        guard fieldHUD?.isVisible == true, tone == .breathing,
+              let border = fieldHUD?.contentView as? FieldBorderView else { return }
+        let wave = sin(Date().timeIntervalSinceReferenceDate * .pi)
+        border.breath = CGFloat(0.5 + 0.5 * wave)
+        border.needsDisplay = true
+    }
+    private func outlineFocusContains(_ element: AXUIElement) -> Bool {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return false }
+        let app = AXUIElementCreateApplication(front.processIdentifier)
+        _ = AXUIElementSetMessagingTimeout(app, 0.15)
+        guard let focused = try? elementValue(app, kAXFocusedUIElementAttribute) else { return false }
+        var current: AXUIElement? = focused
+        for _ in 0..<8 {
+            guard let el = current else { return false }
+            if CFEqual(el, element) { return true }
+            let role = (try? stringValue(el, kAXRoleAttribute)) ?? ""
+            if role == (kAXWindowRole as String) || role == (kAXApplicationRole as String) { return false }
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, kAXParentAttribute as CFString, &parent) == .success,
+                  let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { return false }
+            current = (parent as! AXUIElement)
+        }
+        return false
+    }
+    // 优先用输入框自己的区域。光标太小时，再向上找最近的一块像输入框的区域。
+    private func outlineFrame(around element: AXUIElement) -> CGRect? {
+        var current: AXUIElement? = element
+        var fallback: CGRect?
+        for _ in 0..<8 {
+            guard let el = current else { break }
+            let role = (try? stringValue(el, kAXRoleAttribute)) ?? ""
+            if role == (kAXWindowRole as String) || role == (kAXApplicationRole as String) { break }
+            if let rect = axFrame(of: el), rect.width >= 48, rect.height >= 18 {
+                if rect.height <= 160 { return rect }
+                if fallback == nil { fallback = rect }
+            }
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, kAXParentAttribute as CFString, &parent) == .success,
+                  let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            current = (parent as! AXUIElement)
+        }
+        return fallback ?? axFrame(of: element)
+    }
+    private func restoreYellowOutlineIfPermitted() {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              let bundleID = front.bundleIdentifier, targetBundles.contains(bundleID),
+              let target = try? currentTarget(),
+              let current = try? stringValue(target.element, kAXValueAttribute),
+              fieldPermitsIntercept(bundleID: bundleID, target: target, value: current) else {
+            hideFieldOutline()
+            return
+        }
+        showFieldOutline(.yellow, around: target.element)
+    }
+    private func noteTyping() {
+        if processing { return }
+        if outlineTone == .yellow, Date().timeIntervalSince(outlineCheckedAt) < 0.25 { return }
+        outlineCheckedAt = Date()
+        restoreYellowOutlineIfPermitted()
+    }
+    private func fieldPermitsIntercept(bundleID: String, target: Target, value: String) -> Bool {
+        guard let app = configuredTargets().first(where: { $0.bundleID == bundleID }) else { return false }
+        if app.hijackScope == .all { return true }
+        let signature = componentSignature(for: target, value: value)
+        return app.components.first(where: { $0.id == signature.id })?.decision == .allow
     }
     // 焦点有时只是光标或较小区域。向父级查找输入区域，用于显示处理提示。
     private func composerFrame(around element: AXUIElement) -> CGRect? {
@@ -1852,15 +2566,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return axFrame(of: element)
     }
     private func hideFieldActivity() {
-        fieldHUD?.orderOut(nil)
+        hideFieldOutline()
     }
     private func makeFieldHUD() -> NSPanel {
-        let labelWidth = (L("润色中") as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
-        ]).width
-        let size = NSSize(width: max(72, ceil(labelWidth) + 24), height: 28)
         let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: size),
+            contentRect: NSRect(origin: .zero, size: NSSize(width: 80, height: 32)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1873,7 +2583,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = FieldActivityView(frame: NSRect(origin: .zero, size: size))
+        let border = FieldBorderView(frame: panel.contentView?.bounds ?? .zero)
+        border.autoresizingMask = [.width, .height]
+        panel.contentView = border
         fieldHUD = panel
         return panel
     }
@@ -1920,22 +2632,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }
-    private func refreshHistoryMenu() {
-        let count = CallLog.shared.records.count
-        historyItem?.title = count == 0 ? L("调用历史…") : L("调用历史（%1$@）…", count)
-    }
-
-    @objc private func quit() { NSApp.terminate(nil) }
-    @objc private func requestPermission() {
+    private func requestPermission() {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
         updateStatus(trusted ? L("辅助功能已授权") : L("请在系统设置→隐私与安全性→辅助功能中允许本工具"))
     }
 
-    @objc private func toggleRunning() {
-        if running { stopRunning(); return }
-        startRunning(interactive: true)
-    }
     private func startRunning(interactive: Bool) {
         guard !running else { return }
         guard AXIsProcessTrusted() else {
@@ -1943,6 +2645,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if interactive {
                 requestPermission()
                 alert(L("未获辅助功能权限"), L("请先在系统设置→隐私与安全性→辅助功能中允许本工具，然后再开启。"))
+            }
+            return
+        }
+        guard CGPreflightListenEventAccess() else {
+            updateStatus(L("请在系统设置→隐私与安全性→输入监控中允许本工具"))
+            if interactive {
+                alert(L("未获输入监控权限"), L("请先在系统设置→隐私与安全性→输入监控中允许本工具，然后再开启拦截。"))
+            }
+            return
+        }
+        guard savedOpenAIConfigurationReady() else {
+            updateStatus(L("请先填写 OpenAI 的接口地址、Token 和模型"))
+            if interactive {
+                alert(L("OpenAI 配置尚未就绪"), L("请先填写 OpenAI 的接口地址、Token 和模型，然后再开启拦截。"))
             }
             return
         }
@@ -1962,7 +2678,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyPolishMark()
         pendingFill = nil
         pendingTarget = nil
-        toggleItem.title = L("停止")
         updateStatus(L("运行中（%1$@ 个应用）", targetBundles.count))
     }
     private func stopRunning() {
@@ -1981,7 +2696,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         passThroughReturn = false
         polishMark = .none
         setBusy(false)
-        toggleItem?.title = L("开启")
         updateStatus(L("已停止"))
     }
 
@@ -1993,14 +2707,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
     }
-    @objc private func showSettings() {
-        // 菜单栏菜单结束跟踪时会关掉同步弹出的窗口，延后到下一轮再显示。
-        DispatchQueue.main.async { [weak self] in self?.settingsController.show() }
-    }
-    @objc private func showHistory() {
-        DispatchQueue.main.async { [weak self] in self?.historyController.show() }
-    }
-
     // MARK: - 焦点目标（只取当前焦点输入框，不遍历）
     private func safeRole(_ element: AXUIElement) throws -> (String, String) {
         let role = try stringValue(element, kAXRoleAttribute)
@@ -2128,8 +2834,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard running, type == .keyDown else { return Unmanaged.passUnretained(event) }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard keyCode == Int64(kVK_Return) || keyCode == Int64(kVK_ANSI_KeypadEnter) else {
-            return Unmanaged.passUnretained(event) // 非回车：原样放行，不作任何检查
+        let isReturn = keyCode == Int64(kVK_Return) || keyCode == Int64(kVK_ANSI_KeypadEnter)
+        if !isReturn {
+            noteTyping()
+            return Unmanaged.passUnretained(event)
         }
         let modifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
         guard event.flags.intersection(modifiers).isEmpty else {
@@ -2137,6 +2845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if passThroughReturn {
             passThroughReturn = false
+            hideFieldOutline()
             return Unmanaged.passUnretained(event)
         }
         // 只在目标应用内接管；读取焦点失败时阻止发送并显示错误。
@@ -2208,12 +2917,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hijackPromptPanel?.hide()
         switch choice {
         case .dismiss:
-            replayReturnIfFocused(pending.target)
+            restoreRunningStatus()
         case .deny:
             let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .deny)
             saveComponentDecision(bundleID: pending.bundleID, permission: permission)
             settingsController.applySavedComponentDecision(bundleID: pending.bundleID, permission: permission)
-            replayReturnIfFocused(pending.target)
+            restoreRunningStatus()
         case .allow:
             let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .allow)
             saveComponentDecision(bundleID: pending.bundleID, permission: permission)
@@ -2227,20 +2936,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     private func clearHijackPrompt() {
+        let wasAsking = hijackPrompt != nil
         hijackPrompt = nil
         hijackPromptPanel?.hide()
+        if wasAsking && running && !processing { restoreRunningStatus() }
     }
-    private func replayReturnIfFocused(_ expected: Target) {
+    private func restoreRunningStatus() {
+        updateStatus(L("运行中（%1$@ 个应用）", targetBundles.count))
+    }
+    @discardableResult
+    private func replayReturnIfFocused(_ expected: Target) -> Bool {
         guard let target = try? currentTarget(), sameTarget(target, expected),
               let source = CGEventSource(stateID: .hidSystemState),
               let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: false) else {
             updateStatus(L("焦点已变，未继续处理"))
-            return
+            return false
         }
         passThroughReturn = true
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+        return true
     }
     // 返回 true 表示这次回车应交给原应用。eventWasConsumed 为 true 时改为补发回车。
     private func beginReturnHandling(current: String, target: Target, eventWasConsumed: Bool) -> Bool {
@@ -2251,13 +2967,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let draft = EmbeddedDraft(current)
         let idle = draft.segments.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if idle {
-            if eventWasConsumed { replayReturnIfFocused(target) }
+            if eventWasConsumed { restoreRunningStatus() }
             return !eventWasConsumed
         }
         if let fill = pendingFill, let previous = pendingTarget,
            sameTarget(target, previous), current == fill {
             pendingFill = nil
             pendingTarget = nil
+            hideFieldOutline()
             updateStatus(L("已确认，发送"))
             if eventWasConsumed { replayReturnIfFocused(target) }
             return !eventWasConsumed
@@ -2267,6 +2984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingTarget = nil
         setBusy(true)
         updateStatus(L("判断中…"))
+        showFieldOutline(.breathing, around: target.element)
         DispatchQueue.main.async { [weak self] in self?.runCommandOrPipeline(current: current, target: target) }
         return false
     }
@@ -2343,9 +3061,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     self.pendingFill = replacement
                     self.pendingTarget = target
+                    self.processing = false
+                    self.setBusy(false)
+                    self.showFieldOutline(.green, around: target.element)
+                    self.updateStatus(L("指令已拦截回车"))
+                    return
                 }
                 self.processing = false
                 self.setBusy(false)
+                self.restoreYellowOutlineIfPermitted()
                 self.updateStatus(L("指令已拦截回车"))
             }
         }
@@ -2371,7 +3095,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let polishPrompt = setting(SettingKey.oaPrompt, defaultOAPrompt) + objectInstruction
         gate.roundID = CallLog.shared.begin(original: current, jevPrompt: jevPrompt, polishPrompt: polishPrompt)
         activeRoundID = gate.roundID
-        showFieldActivity()
+        showFieldOutline(.breathing, around: target.element)
         if gate.usesJev {
             callJev(current: current) { [weak self] result in
                 gate.jev = result
@@ -2418,7 +3142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     private func applyPolish(current: String, target: Target, result: Result<String, ProbeError>, roundID: UUID, jevNote: String) {
-        hideFieldActivity()
         switch result {
         case .failure(let err):
             // Jev 已判定需要润色：接口失败时留下原文，不自动发送。再次回车会重试。
@@ -2448,6 +3171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pendingFill = restored.text
                 pendingTarget = target
                 polishMark = .success
+                showFieldOutline(.green, around: target.element)
                 updateStatus(L("已润色回填，确认后再次回车发送"))
             } else {
                 let changedDraft: Bool
@@ -2463,19 +3187,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pendingTarget = nil
                 polishMark = .failure
                 updateStatus(changedDraft ? failureNote : L("写回失败，未发送；再次回车可重试"))
+                restoreYellowOutlineIfPermitted()
             }
             processing = false
             setBusy(false)
         }
     }
     private func failPipeline(_ message: String) {
-        hideFieldActivity()
+        hideFieldOutline()
         processing = false
         pendingFill = nil
         pendingTarget = nil
         polishMark = .failure
         setBusy(false)
         updateStatus(message)
+        restoreYellowOutlineIfPermitted()
     }
     // TypeSafe System One：POST /v1/systemone，Noul 问题返回 0～1 的“是”概率。
     // 只把当前草稿作为 state，不附带上次回填或聊天记录。

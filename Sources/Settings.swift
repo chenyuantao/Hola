@@ -268,6 +268,36 @@ func componentFieldLabel(role: String, subrole: String, identifier: String, titl
     return role.isEmpty ? L("文本框") : role
 }
 
+func componentPermissionDisplay(_ permission: ComponentPermission) -> (tree: String, detail: String) {
+    let parts = permission.id.components(separatedBy: "\u{1e}")
+    guard parts.count == 7 else {
+        return (permission.id, permission.label == permission.id ? "" : permission.label)
+    }
+    let role = parts[0]
+    let subrole = parts[1]
+    let identifier = parts[2]
+    let title = parts[3]
+    let placeholder = parts[4]
+    let description = parts[5]
+    let path = parts[6]
+    let leaf: String
+    if role.isEmpty {
+        leaf = subrole
+    } else if subrole.isEmpty || subrole == role {
+        leaf = role
+    } else {
+        leaf = "\(role) (\(subrole))"
+    }
+    var nodes = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    if !leaf.isEmpty { nodes.append(leaf) }
+    let tree = nodes.isEmpty ? permission.id : nodes.joined(separator: " / ")
+    var details = [identifier, title, placeholder, description].filter { !$0.isEmpty }
+    if details.isEmpty, !permission.label.isEmpty, permission.label != leaf {
+        details = [permission.label]
+    }
+    return (tree, details.joined(separator: " · "))
+}
+
 func applyingComponentDecision(_ targets: [TargetApplication], bundleID: String, permission: ComponentPermission) -> [TargetApplication] {
     guard !permission.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           let index = targets.firstIndex(where: { $0.bundleID == bundleID }) else { return targets }
@@ -294,3 +324,24 @@ func targetSettingsValue(_ targets: [TargetApplication]) -> String {
     return String(data: data, encoding: .utf8) ?? "[]"
 }
 func jevEnabled() -> Bool { setting(SettingKey.jevEnabled) == "true" }
+
+func openAIConfigurationReady(url: String, token: String, model: String, extraParameters: String) -> Bool {
+    let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let components = URLComponents(string: trimmedURL),
+          let scheme = components.scheme?.lowercased(),
+          scheme == "http" || scheme == "https",
+          let host = components.host, !host.isEmpty,
+          !trimmedToken.isEmpty, !trimmedModel.isEmpty else { return false }
+    return (try? extraRequestParameters(extraParameters)) != nil
+}
+
+func savedOpenAIConfigurationReady() -> Bool {
+    openAIConfigurationReady(
+        url: setting(SettingKey.oaURL),
+        token: setting(SettingKey.oaToken),
+        model: setting(SettingKey.oaModel),
+        extraParameters: setting(SettingKey.oaExtraParameters)
+    )
+}
