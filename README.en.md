@@ -130,7 +130,7 @@ With **Intercept some**, the first Return in a field asks beside that field:
 | Allow | Polishing starts | Later Returns in this field are intercepted |
 | Not now | It stays intercepted and is not sent | Nothing is remembered, so the next Return asks again |
 
-Saved choices appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately.
+Saved choices are stored by the field's place in the window's accessibility tree, remain after restart, and appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately.
 
 While a request is in flight, the input border breathes yellow and the menu bar shows progress. After the revised text is written back, the border turns green until the next Return sends it or another key is pressed. A **green dot** on the menu bar icon indicates success; a **red dot** indicates failure. Open **History** in the panel to inspect originals, revisions, prompts, and processing details.
 
@@ -194,7 +194,7 @@ async (input) => {
 
 `interrupt: true` blocks this Return and inserts a nonempty `replacement` when provided. Press Return again to send the inserted draft. `interrupt: false` continues the normal polishing flow and ignores `replacement`. Script or replacement failures do not send the draft. Commands run only in selected target apps.
 
-Rules match from top to bottom. Drag the handle on the left to change priority. Enter a draft and click **Test** to print the script result, or **No match** when nothing matches. The test uses the rules currently being edited, without saving first.
+Rules match from top to bottom. Drag the handle on the left to change priority. **Test**, to the right of **Export** at the bottom of the panel, opens the test window. It matches the current commands first, then runs the current persona prompts when nothing blocks Return. The test uses the rules and prompts being edited. It does not record history or send the draft. Type the draft, or choose an original, revised text, or unused revision from History.
 
 Use `fetch` for network requests. It follows the [Fetch standard](https://fetch.spec.whatwg.org/). Scripts can `await fetch(url, init)`. `Headers`, `Request`, `Response`, `AbortController`, `FormData`, `Blob`, and `URLSearchParams` are also available. HTTP 4xx/5xx responses do not reject the promise; check `response.ok`. An invalid URL, a connection failure, or an integrity mismatch rejects with `TypeError`. Aborting through `AbortSignal` rejects with `AbortError` or `TimeoutError`. The whole script, including `fetch`, must finish within 10 seconds; a timeout does not send the draft.
 

@@ -241,7 +241,7 @@ func makeComponentSignature(
     placeholder: String,
     description: String,
     value: String,
-    ancestorPath: String
+    treePosition: String
 ) -> ComponentSignature {
     let ident = stableComponentToken(identifier, limit: 80, dropIfTooLong: true)
     let place = stableComponentToken(placeholder, limit: 80, dropIfTooLong: true)
@@ -250,8 +250,10 @@ func makeComponentSignature(
     let heading = stableComponentToken(title, limit: 80, dropIfTooLong: true)
     let stableDescription = desc == current ? "" : desc
     let stableTitle = heading == current ? "" : heading
-    let path = stableComponentToken(ancestorPath, limit: 240, dropIfTooLong: false)
-    let id = [role, subrole, ident, stableTitle, place, stableDescription, path].joined(separator: "\u{1e}")
+    // 唯一 ID 只用组件在窗口里的树位置。标题、占位符、标识和当前文本都会变，不能拿来对上次的选择。
+    let position = treePosition.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallback = [role, subrole].filter { !$0.isEmpty }.joined(separator: "#")
+    let id = position.isEmpty ? (fallback.isEmpty ? "AXTextField" : fallback) : position
     return ComponentSignature(id: id, label: componentFieldLabel(
         role: role, subrole: subrole, identifier: ident, title: stableTitle, placeholder: place, description: stableDescription
     ))
@@ -270,6 +272,11 @@ func componentFieldLabel(role: String, subrole: String, identifier: String, titl
 
 func componentPermissionDisplay(_ permission: ComponentPermission) -> (tree: String, detail: String) {
     let parts = permission.id.components(separatedBy: "\u{1e}")
+    if !permission.id.contains("\u{1e}") {
+        let tree = permission.id.replacingOccurrences(of: "/", with: " / ")
+        let detail = permission.label == permission.id || permission.label.isEmpty ? "" : permission.label
+        return (tree, detail)
+    }
     guard parts.count == 7 else {
         return (permission.id, permission.label == permission.id ? "" : permission.label)
     }
@@ -344,4 +351,32 @@ func savedOpenAIConfigurationReady() -> Bool {
         model: setting(SettingKey.oaModel),
         extraParameters: setting(SettingKey.oaExtraParameters)
     )
+}
+
+enum HistoryDraftKind: Equatable {
+    case original
+    case adjusted
+    case unused
+}
+
+struct HistoryDraftChoice: Equatable {
+    let kind: HistoryDraftKind
+    let text: String
+}
+
+/// 调用方按从新到旧传入。同一段文字只保留最新一次出现时的角色。
+func historyDraftChoices(_ records: [(original: String, adjusted: String, unused: String)]) -> [HistoryDraftChoice] {
+    var seen = Set<String>()
+    var choices: [HistoryDraftChoice] = []
+    func add(_ raw: String, kind: HistoryDraftKind) {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, seen.insert(key).inserted else { return }
+        choices.append(HistoryDraftChoice(kind: kind, text: raw))
+    }
+    for record in records {
+        add(record.original, kind: .original)
+        add(record.adjusted, kind: .adjusted)
+        add(record.unused, kind: .unused)
+    }
+    return choices
 }

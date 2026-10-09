@@ -26,19 +26,23 @@ struct SettingsTests {
         let replaced = applyingComponentDecision(remembered, bundleID: "test.app", permission: ComponentPermission(id: "composer", label: "输入消息", decision: .allow))
         precondition(replaced[0].components == [ComponentPermission(id: "composer", label: "输入消息", decision: .allow)])
         precondition(applyingComponentDecision(apps, bundleID: "missing", permission: permission) == apps)
-        let field = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "", value: "hello", ancestorPath: "AXGroup")
-        let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "hello", value: "hello", ancestorPath: "AXGroup")
-        precondition(field == sameField && field.label == "输入消息")
-        let search = makeComponentSignature(role: "AXTextField", subrole: "AXSearchField", identifier: "", title: "", placeholder: "", description: "", value: "", ancestorPath: "")
-        precondition(search.label == "搜索框" && search.id != field.id)
-        let titled = makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXSplitGroup/AXGroup")
+        let position = "AXGroup[0]/AXTextArea[0]"
+        let field = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "", value: "hello", treePosition: position)
+        let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "session-id", title: "别的标题", placeholder: "别的占位", description: "hello", value: "hello", treePosition: position)
+        precondition(field.id == sameField.id && field.id == position && field.label == "输入消息")
+        precondition(sameField.label == "别的标题")
+        let search = makeComponentSignature(role: "AXTextField", subrole: "AXSearchField", identifier: "", title: "", placeholder: "", description: "", value: "", treePosition: "AXTextField[0]")
+        precondition(search.label == "搜索框" && search.id == "AXTextField[0]" && search.id != field.id)
+        let bare = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "", description: "", value: "", treePosition: " ")
+        precondition(bare.id == "AXTextArea")
+        let titled = makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", treePosition: "AXSplitGroup[0]/AXGroup[1]/AXTextField[0]")
         precondition(titled.label == "说明")
-        precondition(titled.id != makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXGroup").id)
+        precondition(titled.id != makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", treePosition: "AXGroup[0]/AXTextField[0]").id)
         let titledDisplay = componentPermissionDisplay(ComponentPermission(id: titled.id, label: titled.label, decision: .allow))
-        precondition(titledDisplay.tree == "AXSplitGroup / AXGroup / AXTextField")
-        precondition(titledDisplay.detail == "id · 标题 · 占位 · 说明")
+        precondition(titledDisplay.tree == "AXSplitGroup[0] / AXGroup[1] / AXTextField[0]")
+        precondition(titledDisplay.detail == "说明")
         let searchDisplay = componentPermissionDisplay(ComponentPermission(id: search.id, label: search.label, decision: .deny))
-        precondition(searchDisplay.tree == "AXTextField (AXSearchField)")
+        precondition(searchDisplay.tree == "AXTextField[0]")
         precondition(searchDisplay.detail == "搜索框")
         let legacyDisplay = componentPermissionDisplay(permission)
         precondition(legacyDisplay.tree == "composer" && legacyDisplay.detail == "输入消息")
@@ -169,8 +173,15 @@ struct SettingsTests {
             _ = try decodeSettingsFile(Data(#"{"kind":"hola-settings","version":1,"settings":{"commands":[]}}"#.utf8))
             fatalError("Wrong commands value type accepted")
         } catch is ProbeError { }
+        let choices = historyDraftChoices([
+            (original: " 你好 ", adjusted: "您好", unused: ""),
+            (original: "您好", adjusted: "", unused: "你好呀"),
+            (original: "   ", adjusted: "  ", unused: "\n")
+        ])
+        precondition(choices.map(\.text) == [" 你好 ", "您好", "你好呀"])
+        precondition(choices.map(\.kind) == [.original, .adjusted, .unused])
         try testFetch()
-        print("Passed: settings round trips, extra request body, legacy compatibility, malformed settings rejection, fetch.")
+        print("Passed: settings round trips, extra request body, legacy compatibility, malformed settings rejection, history drafts, fetch.")
     }
 
     static func testFetch() throws {

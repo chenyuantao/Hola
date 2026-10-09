@@ -438,7 +438,7 @@ private final class PanelTabButton: NSView {
 }
 
 // 点击菜单栏图标后打开的分区面板。
-final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate, NSTextViewDelegate {
+final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
     private struct Spec {
         let key: String
         let title: String
@@ -478,11 +478,12 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
     private var displayedLanguage = setting(LanguagePreference.key, "system")
     private var commandRows = NSStackView()
     private var commandFields: [(pattern: NSTextField, script: NSTextView)] = []
-    private var commandTestInput: NSTextField?
-    private var commandTestResult: NSTextView?
-    private var commandTestButton: NSButton?
-    private var commandTestRunner: CommandRunner?
-    private var commandTestToken: UUID?
+    private var testPanel: NSWindow?
+    private var testInput: NSTextView?
+    private var testResult: NSTextView?
+    private var testButton: NSButton?
+    private var testRunner: CommandRunner?
+    private var testToken: UUID?
     private var tabView: NSTabView?
     private var tabButtons: [PanelTabButton] = []
     private var interceptCheckbox: NSButton?
@@ -566,7 +567,8 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         footerLine.translatesAutoresizingMaskIntoConstraints = false
         let importButton = NSButton(title: L("导入"), target: self, action: #selector(importFromFile))
         let exportButton = NSButton(title: L("导出"), target: self, action: #selector(exportToFile))
-        let fileButtons = NSStackView(views: [importButton, exportButton])
+        let testButton = NSButton(title: L("测试"), target: self, action: #selector(showTestPanel))
+        let fileButtons = NSStackView(views: [importButton, exportButton, testButton])
         fileButtons.orientation = .horizontal
         fileButtons.spacing = 8
         fileButtons.translatesAutoresizingMaskIntoConstraints = false
@@ -893,8 +895,6 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let test = makeCommandTest()
-        fill(test, in: stack)
         let header = makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。"))
         fill(header, in: stack)
         commandRows = NSStackView()
@@ -904,7 +904,7 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         fill(commandRows, in: stack)
         let add = NSButton(title: L("添加指令"), target: self, action: #selector(addCommand))
         fill(add, in: stack)
-        for view in [test, header, commandRows, add] {
+        for view in [header, commandRows, add] {
             view.setContentHuggingPriority(.required, for: .vertical)
         }
         let container = NSView()
@@ -930,80 +930,268 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         return scroll
     }
 
-    private func makeCommandTest() -> NSView {
+    private func makeTestPanel() -> NSWindow {
+        let panel = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = L("测试")
+        panel.minSize = NSSize(width: 440, height: 380)
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        let body = makeGlobalTest()
+        let close = NSButton(title: L("关闭"), target: self, action: #selector(closeTestPanel))
+        close.bezelStyle = .rounded
+        close.keyEquivalent = "\u{1b}"
+        let container = NSView()
+        container.addSubview(body)
+        container.addSubview(close)
+        body.translatesAutoresizingMaskIntoConstraints = false
+        close.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            body.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
+            body.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            body.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            close.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 16),
+            close.trailingAnchor.constraint(equalTo: body.trailingAnchor),
+            close.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16)
+        ])
+        panel.contentView = container
+        return panel
+    }
+    private func makeGlobalTest() -> NSView {
         let group = NSStackView()
         group.orientation = .vertical
         group.alignment = .leading
         group.spacing = 6
-        let field = NSTextField()
-        field.placeholderString = L("输入要测试的草稿")
-        field.font = .systemFont(ofSize: 13)
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        commandTestInput = field
-        let button = NSButton(title: L("测试"), target: self, action: #selector(testCommand))
+        let title = NSTextField(labelWithString: L("测试文稿"))
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let hint = NSTextField(wrappingLabelWithString: L("先按当前指令匹配；没有拦截时，再用当前人设试跑润色。不记入历史，也不会发送。文稿可以手写，或从历史记录里选择曾经出现的原文和润色结果。"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 500
+        let editor = makeDraftTextView(editable: true, monospaced: false)
+        let history = NSButton(title: L("从历史选择"), target: self, action: #selector(showHistoryDrafts(_:)))
+        history.setContentHuggingPriority(.required, for: .horizontal)
+        let button = NSButton(title: L("测试"), target: self, action: #selector(runTest))
         button.setContentHuggingPriority(.required, for: .horizontal)
-        commandTestButton = button
-        let controls = NSStackView(views: [field, button])
+        testButton = button
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let controls = NSStackView(views: [history, spacer, button])
         controls.orientation = .horizontal
-        controls.distribution = .fill
         controls.alignment = .centerY
         controls.spacing = 8
-        let resultLabel = NSTextField(labelWithString: L("返回值"))
+        let resultLabel = NSTextField(labelWithString: L("测试结果"))
         resultLabel.font = .systemFont(ofSize: 12)
         resultLabel.textColor = .secondaryLabelColor
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let result = NSTextView()
-        result.isEditable = false
-        result.isSelectable = true
-        result.isRichText = false
-        result.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        result.isVerticallyResizable = true
-        result.isHorizontallyResizable = false
-        result.autoresizingMask = [.width]
-        result.textContainer?.widthTracksTextView = true
-        result.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        result.textContainerInset = NSSize(width: 4, height: 4)
-        scroll.documentView = result
-        commandTestResult = result
+        let resultView = makeDraftTextView(editable: false, monospaced: false)
+        testInput = editor.text
+        testResult = resultView.text
+        group.addArrangedSubview(title)
+        group.addArrangedSubview(hint)
+        group.addArrangedSubview(editor.scroll)
         group.addArrangedSubview(controls)
         group.addArrangedSubview(resultLabel)
-        group.addArrangedSubview(scroll)
-        for view in [controls, scroll] {
+        group.addArrangedSubview(resultView.scroll)
+        for view in [title, hint, editor.scroll, controls, resultLabel] {
+            view.setContentHuggingPriority(.required, for: .vertical)
+        }
+        resultView.scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        resultView.scroll.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        for view in [hint, editor.scroll, controls, resultView.scroll] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: group.widthAnchor).isActive = true
         }
-        scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        editor.scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        resultView.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
         return group
     }
-    @objc private func testCommand() {
-        window?.makeFirstResponder(nil)
-        let input = commandTestInput?.stringValue ?? ""
-        let rules = commandFields.map { CommandRule(pattern: $0.pattern.stringValue, script: $0.script.string) }
-        guard let rule = matchingCommand(input, rules: rules) else {
-            showCommandTestResult(L("未命中"))
+    private func makeDraftTextView(editable: Bool, monospaced: Bool) -> (scroll: NSScrollView, text: NSTextView) {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let text = NSTextView()
+        text.isEditable = editable
+        text.isSelectable = true
+        text.isRichText = false
+        text.font = monospaced
+            ? .monospacedSystemFont(ofSize: 12, weight: .regular)
+            : .systemFont(ofSize: 13)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        text.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.textContainerInset = NSSize(width: 4, height: 4)
+        scroll.documentView = text
+        return (scroll, text)
+    }
+    @objc private func showTestPanel() {
+        guard let window else { return }
+        if testPanel == nil { testPanel = makeTestPanel() }
+        guard let panel = testPanel else { return }
+        if window.attachedSheet == panel { return }
+        window.beginSheet(panel)
+    }
+    @objc private func closeTestPanel() {
+        guard let panel = testPanel else { return }
+        window?.endSheet(panel)
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender == testPanel else { return true }
+        window?.endSheet(sender)
+        return false
+    }
+    private func dismissTestPanel() {
+        testToken = nil
+        testRunner = nil
+        guard let panel = testPanel else { return }
+        if let parent = panel.sheetParent { parent.endSheet(panel) }
+        panel.orderOut(nil)
+        testPanel = nil
+        testInput = nil
+        testResult = nil
+        testButton = nil
+    }
+    @objc private func showHistoryDrafts(_ sender: NSButton) {
+        let menu = NSMenu()
+        let records = CallLog.shared.records.map {
+            (original: $0.original, adjusted: $0.adjustedText, unused: $0.unusedPolish)
+        }
+        let choices = historyDraftChoices(records)
+        if choices.isEmpty {
+            let item = NSMenuItem(title: L("还没有可选择的文稿"), action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            for choice in choices {
+                let item = NSMenuItem(title: historyDraftTitle(choice), action: #selector(applyHistoryDraft(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = choice.text
+                item.toolTip = choice.text
+                menu.addItem(item)
+            }
+        }
+        guard let event = NSApp.currentEvent else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: sender)
+    }
+    @objc private func applyHistoryDraft(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        testInput?.string = text
+    }
+    private func historyDraftTitle(_ choice: HistoryDraftChoice) -> String {
+        let preview = oneLine(choice.text, limit: 48)
+        switch choice.kind {
+        case .original: return L("原句：%1$@", preview)
+        case .adjusted: return L("调整后结果：%1$@", preview)
+        case .unused: return L("未采用的润色结果：%1$@", preview)
+        }
+    }
+    private func editorPrompt(_ key: String, _ fallback: String) -> String {
+        let raw = editors[key]?.string ?? setting(key, fallback)
+        return raw.isEmpty ? fallback : raw
+    }
+    @objc private func runTest() {
+        testPanel?.makeFirstResponder(nil)
+        let input = testInput?.string ?? ""
+        let draft = EmbeddedDraft(input)
+        if draft.segments.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            showTestResult(L("空白草稿会原样放行"))
             return
         }
         let token = UUID()
-        commandTestToken = token
-        commandTestButton?.isEnabled = false
-        showCommandTestResult(L("执行指令中…"))
-        commandTestRunner = CommandRunner(script: rule.script, input: input) { [weak self] result in
-            guard let self, self.commandTestToken == token else { return }
-            self.commandTestRunner = nil
-            self.commandTestButton?.isEnabled = true
+        testToken = token
+        testButton?.isEnabled = false
+        showTestResult(L("测试中…"))
+        let rules = commandFields.map { CommandRule(pattern: $0.pattern.stringValue, script: $0.script.string) }
+        guard let rule = matchingCommand(input, rules: rules) else {
+            runPolishTest(input: input, token: token, commandNote: L("未命中"))
+            return
+        }
+        testRunner = CommandRunner(script: rule.script, input: input) { [weak self] result in
+            guard let self, self.testToken == token else { return }
+            self.testRunner = nil
             switch result {
-            case .success(let value):
-                self.showCommandTestResult(formatCommandResult(value))
             case .failure(let error):
-                self.showCommandTestResult(error.description)
+                self.finishTest(L("指令失败，未发送：%1$@", error.description), token: token)
+            case .success(let value):
+                let note = formatCommandResult(value)
+                guard value.interrupt else {
+                    self.runPolishTest(input: input, token: token, commandNote: note)
+                    return
+                }
+                var lines = [L("指令：%1$@", note), "", L("指令已拦截回车")]
+                if let replacement = value.replacement, !replacement.isEmpty, replacement != input {
+                    lines += ["", replacement]
+                }
+                self.finishTest(lines.joined(separator: "\n"), token: token)
             }
         }
     }
-    private func showCommandTestResult(_ text: String) {
-        commandTestResult?.string = text
+    private func runPolishTest(input: String, token: UUID, commandNote: String) {
+        let jevPrompt = editorPrompt(SettingKey.jevPrompt, defaultJevPrompt)
+        let polishPrompt = editorPrompt(SettingKey.oaPrompt, defaultOAPrompt)
+        let useJev = jevCheckbox?.state == .on
+        func stillCurrent() -> Bool { testToken == token }
+        func present(judgment: String, body: String) {
+            var lines = [L("指令：%1$@", commandNote), "", L("判断：%1$@", judgment)]
+            if !body.isEmpty { lines += ["", body] }
+            finishTest(lines.joined(separator: "\n"), token: token)
+        }
+        func runPolish(judgment: String) {
+            callOpenAI(content: input, prompt: polishPrompt) { result in
+                guard stillCurrent() else { return }
+                switch result {
+                case .failure(let error):
+                    present(judgment: judgment, body: error.description)
+                case .success(let text):
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let restored = EmbeddedDraft(input).restore(trimmed) else {
+                        present(judgment: judgment, body: L("模型修改了嵌入对象占位符；原草稿未改动"))
+                        return
+                    }
+                    let original = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if restored.text == original {
+                        present(judgment: judgment, body: L("与原文一致"))
+                    } else {
+                        present(judgment: judgment, body: restored.text)
+                    }
+                }
+            }
+        }
+        if useJev {
+            callJev(current: input, prompt: jevPrompt) { [weak self] result in
+                guard let self, stillCurrent() else { return }
+                switch result {
+                case .failure(let error):
+                    self.finishTest([L("指令：%1$@", commandNote), "", error.description].joined(separator: "\n"), token: token)
+                case .success(let decision):
+                    let (needPolish, score) = decision
+                    let pct = String(format: "%.0f%%", score * 100)
+                    let judgment = "\(needPolish ? L("需要润色") : L("不需要润色")) \(pct)"
+                    guard needPolish else {
+                        present(judgment: judgment, body: "")
+                        return
+                    }
+                    self.showTestResult(L("润色中（Jev %1$@）…", pct))
+                    runPolish(judgment: judgment)
+                }
+            }
+        } else {
+            showTestResult(L("润色中…"))
+            runPolish(judgment: L("未启用"))
+        }
+    }
+    private func finishTest(_ text: String, token: UUID) {
+        guard testToken == token else { return }
+        testButton?.isEnabled = true
+        showTestResult(text)
+    }
+    private func showTestResult(_ text: String) {
+        testResult?.string = text
     }
     @objc private func addCommand() { appendCommand(CommandRule(pattern: "^#", script: "async (input) => {\n  return { interrupt: true, replacement: input.slice(1) };\n}")) }
     private func appendCommand(_ rule: CommandRule) {
@@ -1280,6 +1468,7 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         defer { applyingForm = false }
         let language = setting(LanguagePreference.key, "system")
         if displayedLanguage != language {
+            dismissTestPanel()
             let oldWindow = window
             let frame = oldWindow?.frame
             let visible = oldWindow?.isVisible == true
@@ -1296,9 +1485,6 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         targetApplications = configuredTargets()
         renderTargets()
         jevCheckbox?.state = jevEnabled() ? .on : .off
-        commandTestToken = nil
-        commandTestRunner = nil
-        commandTestButton?.isEnabled = true
         for row in commandRows.arrangedSubviews { commandRows.removeArrangedSubview(row); row.removeFromSuperview() }
         commandFields.removeAll()
         for rule in (try? decodeCommands(setting(SettingKey.commands, "[]"))) ?? [] { appendCommand(rule) }
@@ -3000,29 +3186,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             placeholder: optionalAXString(target.element, kAXPlaceholderValueAttribute),
             description: optionalAXString(target.element, kAXDescriptionAttribute),
             value: value,
-            ancestorPath: ancestorRolePath(of: target.element)
+            treePosition: componentTreePosition(of: target.element)
         )
     }
-    private func ancestorRolePath(of element: AXUIElement) -> String {
+    /// 从输入框走到窗口为止，每一层记成「角色[在父节点中的序号]」。窗口本身不计入。
+    private func componentTreePosition(of element: AXUIElement) -> String {
         var parts: [String] = []
         var current = element
-        for _ in 0..<8 {
-            var parent: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parent) == .success,
-                  let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
-            let parentElement = parent as! AXUIElement
-            let role = optionalAXString(parentElement, kAXRoleAttribute)
+        for _ in 0..<16 {
+            let role = optionalAXString(current, kAXRoleAttribute)
             if role.isEmpty || role == (kAXWindowRole as String) || role == (kAXApplicationRole as String) { break }
-            let ident = stableAncestorIdentifier(optionalAXString(parentElement, kAXIdentifierAttribute))
-            parts.append(ident.isEmpty ? role : "\(role)#\(ident)")
-            current = parentElement
+            if let index = siblingIndex(of: current) {
+                parts.append("\(role)[\(index)]")
+            } else {
+                parts.append(role)
+            }
+            guard let parent = axParent(current) else { break }
+            current = parent
         }
         return parts.reversed().joined(separator: "/")
     }
-    private func stableAncestorIdentifier(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        return trimmed.count <= 80 ? trimmed : String(trimmed.prefix(80))
+    private func axParent(_ element: AXUIElement) -> AXUIElement? {
+        var parent: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
+              let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { return nil }
+        return (parent as! AXUIElement)
+    }
+    private func siblingIndex(of element: AXUIElement) -> Int? {
+        guard let parent = axParent(element) else { return nil }
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(parent, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let childrenRef else { return nil }
+        let children: [AXUIElement]
+        if let list = childrenRef as? [AXUIElement] {
+            children = list
+        } else if let list = childrenRef as? [AnyObject] {
+            children = list.compactMap { item in
+                guard CFGetTypeID(item as CFTypeRef) == AXUIElementGetTypeID() else { return nil }
+                return (item as! AXUIElement)
+            }
+        } else {
+            return nil
+        }
+        return children.firstIndex { CFEqual($0, element) }
     }
 
     private func runCommandOrPipeline(current: String, target: Target) {
@@ -3097,7 +3303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeRoundID = gate.roundID
         showFieldOutline(.breathing, around: target.element)
         if gate.usesJev {
-            callJev(current: current) { [weak self] result in
+            callJev(current: current, prompt: setting(SettingKey.jevPrompt, defaultJevPrompt)) { [weak self] result in
                 gate.jev = result
                 self?.considerPipeline(token: token, gate: gate, current: current, target: target)
             }
@@ -3130,7 +3336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let polish = gate.polish else {
                 CallLog.shared.noteJev(gate.roundID, jevNote)
                 updateStatus(gate.usesJev ? L("润色中（Jev %1$@）…", pct) : L("润色中…"))
-                callOpenAI(content: current) { [weak self] result in
+                callOpenAI(content: current, prompt: setting(SettingKey.oaPrompt, defaultOAPrompt)) { [weak self] result in
                     CallLog.shared.notePolish(gate.roundID, result: result)
                     gate.polish = result
                     self?.considerPipeline(token: token, gate: gate, current: current, target: target)
@@ -3203,128 +3409,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatus(message)
         restoreYellowOutlineIfPermitted()
     }
-    // TypeSafe System One：POST /v1/systemone，Noul 问题返回 0～1 的“是”概率。
-    // 只把当前草稿作为 state，不附带上次回填或聊天记录。
-    private func callJev(current: String, completion: @escaping (Result<(Bool, Double), ProbeError>) -> Void) {
-        let urlString = setting(SettingKey.jevURL, defaultJevURL)
-        let token = setting(SettingKey.jevToken)
-        let model = setting(SettingKey.jevModel, defaultJevModel)
-        let draft = EmbeddedDraft(current)
-        let instructions = setting(SettingKey.jevPrompt, defaultJevPrompt)
-            + (draft.hasObjects ? "\n\n" + draft.instruction : "")
-        func fail(_ message: String) {
-            completion(.failure(ProbeError(message)))
-        }
-        guard !token.isEmpty else { fail(L("Jev Token 未配置")); return }
-        guard let url = URL(string: urlString) else { fail(L("Jev 接口地址无效")); return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 20
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let body: [String: Any] = [
-            "state": draft.modelText,
-            "model": model,
-            "questions": [
-                "need_polish": [
-                    "type": "noul",
-                    "instructions": instructions,
-                    "criteria": ["true": L("需要润色"), "false": L("不需要润色")]
-                ]
+}
+
+// 人设测试和正式润色共用。测试传入编辑中的提示词，不写入历史。
+// TypeSafe System One：POST /v1/systemone，Noul 问题返回 0～1 的“是”概率。
+// 只把当前草稿作为 state，不附带上次回填或聊天记录。
+private func callJev(current: String, prompt: String, completion: @escaping (Result<(Bool, Double), ProbeError>) -> Void) {
+    let urlString = setting(SettingKey.jevURL, defaultJevURL)
+    let token = setting(SettingKey.jevToken)
+    let model = setting(SettingKey.jevModel, defaultJevModel)
+    let draft = EmbeddedDraft(current)
+    let instructions = prompt + (draft.hasObjects ? "\n\n" + draft.instruction : "")
+    func fail(_ message: String) {
+        completion(.failure(ProbeError(message)))
+    }
+    guard !token.isEmpty else { fail(L("Jev Token 未配置")); return }
+    guard let url = URL(string: urlString) else { fail(L("Jev 接口地址无效")); return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 20
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    let body: [String: Any] = [
+        "state": draft.modelText,
+        "model": model,
+        "questions": [
+            "need_polish": [
+                "type": "noul",
+                "instructions": instructions,
+                "criteria": ["true": L("需要润色"), "false": L("不需要润色")]
             ]
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
-            fail(L("Jev 请求体序列化失败")); return
-        }
-        request.httpBody = data
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                let status = (response as? HTTPURLResponse)?.statusCode
-                if let error = error { fail(error.localizedDescription); return }
-                guard let data = data else { fail(L("Jev 无响应数据")); return }
-                let snippet = String(data: data, encoding: .utf8)?.prefix(180) ?? ""
-                let code = status ?? 0
-                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    fail(L("Jev HTTP %1$@，响应非 JSON：%2$@", code, snippet)); return
-                }
-                guard (200..<300).contains(code) else {
-                    fail("Jev HTTP \(code)：\(snippet)"); return
-                }
-                if let answers = obj["answers"] as? [String: Any],
-                   let answer = answers["need_polish"] as? [String: Any],
-                   let noul = (answer["noul"] as? NSNumber)?.doubleValue,
-                   noul.isFinite, (0...1).contains(noul) {
-                    completion(.success((noul >= 0.5, noul)))
-                } else if let detail = obj["detail"] ?? obj["error"] {
-                    fail("Jev HTTP \(code)：\(detail)")
-                } else {
-                    fail(L("Jev HTTP %1$@，无法解析 noul：%2$@", code, snippet))
-                }
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+        fail(L("Jev 请求体序列化失败")); return
+    }
+    request.httpBody = data
+    URLSession.shared.dataTask(with: request) { data, response, error in
+        DispatchQueue.main.async {
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if let error = error { fail(error.localizedDescription); return }
+            guard let data = data else { fail(L("Jev 无响应数据")); return }
+            let snippet = String(data: data, encoding: .utf8)?.prefix(180) ?? ""
+            let code = status ?? 0
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                fail(L("Jev HTTP %1$@，响应非 JSON：%2$@", code, snippet)); return
             }
-        }.resume()
-    }
-    private func callOpenAI(content: String, completion: @escaping (Result<String, ProbeError>) -> Void) {
-        let configuredURL = setting(SettingKey.oaURL)
-        let model = setting(SettingKey.oaModel)
-        let token = setting(SettingKey.oaToken)
-        let draft = EmbeddedDraft(content)
-        let system = setting(SettingKey.oaPrompt, defaultOAPrompt)
-            + (draft.hasObjects ? "\n\n" + draft.instruction : "")
-        guard !configuredURL.isEmpty else {
-            completion(.failure(ProbeError(L("OpenAI 接口地址未配置"))))
-            return
-        }
-        guard let requestURL = chatCompletionsURL(configuredURL) else {
-            completion(.failure(ProbeError(L("OpenAI 接口地址无效"))))
-            return
-        }
-        let extraParameters = setting(SettingKey.oaExtraParameters)
-        chatCompletion(urlString: requestURL, token: token, model: model, system: system,
-                       user: draft.modelText, extraParameters: extraParameters, completion: completion)
-    }
-    // OpenAI 兼容 chat/completions：{model?, messages:[system,user]} → choices[0].message.content
-    private func chatCompletion(urlString: String, token: String, model: String, system: String, user: String,
-                                extraParameters: String,
-                                completion: @escaping (Result<String, ProbeError>) -> Void) {
-        func fail(_ message: String) {
-            completion(.failure(ProbeError(message)))
-        }
-        guard let url = URL(string: urlString) else { fail(L("接口地址无效")); return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 20
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        guard let body = try? chatCompletionBody(model: model, system: system, user: user,
-                                                 extraParameters: extraParameters),
-              let data = try? JSONSerialization.data(withJSONObject: body) else {
-            fail(L("请求体序列化失败")); return
-        }
-        request.httpBody = data
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                let status = (response as? HTTPURLResponse)?.statusCode
-                if let error = error { fail(error.localizedDescription); return }
-                guard let data = data else { fail(L("无响应数据")); return }
-                let snippet = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    fail(L("响应非 JSON：%1$@", snippet)); return
-                }
-                guard let code = status, (200..<300).contains(code) else {
-                    fail("HTTP \(status ?? 0)：\(snippet)"); return
-                }
-                if let choices = obj["choices"] as? [[String: Any]], let first = choices.first,
-                   let message = first["message"] as? [String: Any], let text = message["content"] as? String,
-                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    completion(.success(text))
-                } else if let errObj = obj["error"] as? [String: Any], let msg = errObj["message"] as? String {
-                    fail(L("接口错误：%1$@", msg))
-                } else {
-                    fail(L("HTTP %1$@，无法解析响应：%2$@", status ?? 0, snippet))
-                }
+            guard (200..<300).contains(code) else {
+                fail("Jev HTTP \(code)：\(snippet)"); return
             }
-        }.resume()
+            if let answers = obj["answers"] as? [String: Any],
+               let answer = answers["need_polish"] as? [String: Any],
+               let noul = (answer["noul"] as? NSNumber)?.doubleValue,
+               noul.isFinite, (0...1).contains(noul) {
+                completion(.success((noul >= 0.5, noul)))
+            } else if let detail = obj["detail"] ?? obj["error"] {
+                fail("Jev HTTP \(code)：\(detail)")
+            } else {
+                fail(L("Jev HTTP %1$@，无法解析 noul：%2$@", code, snippet))
+            }
+        }
+    }.resume()
+}
+
+private func callOpenAI(content: String, prompt: String, completion: @escaping (Result<String, ProbeError>) -> Void) {
+    let configuredURL = setting(SettingKey.oaURL)
+    let model = setting(SettingKey.oaModel)
+    let token = setting(SettingKey.oaToken)
+    let draft = EmbeddedDraft(content)
+    let system = prompt + (draft.hasObjects ? "\n\n" + draft.instruction : "")
+    guard !configuredURL.isEmpty else {
+        completion(.failure(ProbeError(L("OpenAI 接口地址未配置"))))
+        return
     }
+    guard let requestURL = chatCompletionsURL(configuredURL) else {
+        completion(.failure(ProbeError(L("OpenAI 接口地址无效"))))
+        return
+    }
+    let extraParameters = setting(SettingKey.oaExtraParameters)
+    chatCompletion(urlString: requestURL, token: token, model: model, system: system,
+                   user: draft.modelText, extraParameters: extraParameters, completion: completion)
+}
+
+// OpenAI 兼容 chat/completions：{model?, messages:[system,user]} → choices[0].message.content
+private func chatCompletion(urlString: String, token: String, model: String, system: String, user: String,
+                            extraParameters: String,
+                            completion: @escaping (Result<String, ProbeError>) -> Void) {
+    func fail(_ message: String) {
+        completion(.failure(ProbeError(message)))
+    }
+    guard let url = URL(string: urlString) else { fail(L("接口地址无效")); return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 20
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    guard let body = try? chatCompletionBody(model: model, system: system, user: user,
+                                             extraParameters: extraParameters),
+          let data = try? JSONSerialization.data(withJSONObject: body) else {
+        fail(L("请求体序列化失败")); return
+    }
+    request.httpBody = data
+    URLSession.shared.dataTask(with: request) { data, response, error in
+        DispatchQueue.main.async {
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if let error = error { fail(error.localizedDescription); return }
+            guard let data = data else { fail(L("无响应数据")); return }
+            let snippet = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                fail(L("响应非 JSON：%1$@", snippet)); return
+            }
+            guard let code = status, (200..<300).contains(code) else {
+                fail("HTTP \(status ?? 0)：\(snippet)"); return
+            }
+            if let choices = obj["choices"] as? [[String: Any]], let first = choices.first,
+               let message = first["message"] as? [String: Any], let text = message["content"] as? String,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                completion(.success(text))
+            } else if let errObj = obj["error"] as? [String: Any], let msg = errObj["message"] as? String {
+                fail(L("接口错误：%1$@", msg))
+            } else {
+                fail(L("HTTP %1$@，无法解析响应：%2$@", status ?? 0, snippet))
+            }
+        }
+    }.resume()
 }
 
 // @convention(c) tap 回调：无捕获状态，经 refcon 转发给 delegate。
