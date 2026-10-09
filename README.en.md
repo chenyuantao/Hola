@@ -177,6 +177,8 @@ Use **Export / Import** in Settings to transfer your target app list and model c
 
 **Support depends on the input field.** Hola reads and writes the `AXValue` of ordinary text fields through macOS Accessibility. Custom editors and apps that do not expose this capability may not work. Adding an app does not establish compatibility. Sending also depends on how the target app handles Return.
 
+Drafts with images or other embedded objects are sent to the model with `<object id="…">` tokens. Hola refuses revisions that alter those tokens. If the text changes, it edits only the text around objects when the target field supports selected-text replacement, avoiding a full overwrite of the attachments.
+
 Before inserting a revision or forwarding Return, Hola checks the foreground app, input field, and draft. AX reads and writes are not atomic, and apps can reuse input fields in ways Hola cannot distinguish. Wait for processing to finish, and trigger a new request after changing conversations. With an input method, commit any composition or candidate text first.
 
 - **Scope**: The draft in the selected app's focused text field. Hola does not collect chat history or read password controls.

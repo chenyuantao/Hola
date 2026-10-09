@@ -184,3 +184,7 @@
 "复制" = "Copy";
 "粘贴" = "Paste";
 "全选" = "Select All";
+"文本中的 <object id=\"…\"> 是嵌入对象的占位符。请保留每个占位符的原文、数量和顺序，只处理占位符之间的普通文字；不要删除、移动或改写占位符。" = "The <object id=\"…\"> tokens represent embedded objects. Preserve every token exactly, including its count and order. Edit only the ordinary text between tokens; never remove, move, or alter a token.";
+"模型修改了嵌入对象占位符" = "The model changed an embedded object token";
+"模型修改了嵌入对象占位符；原草稿未改动" = "The model changed an embedded object token; the original draft was left untouched";
+"部分文字可能已写回，请检查草稿" = "Some text may have been inserted; check the draft";

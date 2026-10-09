@@ -635,7 +635,8 @@ final class CallLog {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             records[index].returnedPolish = cap(trimmed)
             if records[index].finishedAt != nil {
-                if records[index].outcome != .adjusted, trimmed != records[index].original {
+                let restored = EmbeddedDraft(records[index].original).restore(trimmed)?.text ?? trimmed
+                if records[index].outcome != .adjusted, restored != records[index].original {
                     records[index].unusedPolish = cap(trimmed)
                     records[index].polishNote = L("已返回，未采用")
                 }
@@ -653,8 +654,10 @@ final class CallLog {
         records[index].adjustedText = cap(adjustedText)
         if !jevNote.isEmpty { records[index].jevNote = jevNote }
         if !polishNote.isEmpty { records[index].polishNote = polishNote }
-        if outcome != .adjusted, !records[index].returnedPolish.isEmpty, records[index].returnedPolish != records[index].original {
-            records[index].unusedPolish = records[index].returnedPolish
+        let returned = records[index].returnedPolish
+        let restored = EmbeddedDraft(records[index].original).restore(returned)?.text ?? returned
+        if outcome != .adjusted, !returned.isEmpty, restored != records[index].original {
+            records[index].unusedPolish = returned
         }
         persist()
         notify()
@@ -1516,6 +1519,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    // 只改动对象两侧的普通文字；整段设置 AXValue 会丢失 U+FFFC 背后的附件数据。
+    private func writeBackPreservingObjects(_ revised: [String], draft: EmbeddedDraft,
+                                            target originalTarget: Target) -> Bool {
+        guard let target = try? currentTarget(), sameTarget(target, originalTarget),
+              let current = try? stringValue(target.element, kAXValueAttribute), current == draft.original,
+              revised.count == draft.segments.count else { return false }
+        var settable = DarwinBoolean(false)
+        for attribute in [kAXSelectedTextRangeAttribute, kAXSelectedTextAttribute] {
+            guard AXUIElementIsAttributeSettable(target.element, attribute as CFString, &settable) == .success,
+                  settable.boolValue else { return false }
+        }
+        let ranges = draft.textRanges
+        let changed = revised.indices.filter { revised[$0] != draft.segments[$0] }
+        // 先确认每段都能准确选中，再做任何文本改动。
+        for index in changed {
+            var cfRange = CFRange(location: ranges[index].location, length: ranges[index].length)
+            guard let selection = AXValueCreate(.cfRange, &cfRange),
+                  AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, selection) == .success else { return false }
+            let selected = try? stringValue(target.element, kAXSelectedTextAttribute)
+            guard selected == draft.segments[index] || (draft.segments[index].isEmpty && selected == nil) else { return false }
+        }
+        var expected = draft.original
+        for index in changed.reversed() {
+            var cfRange = CFRange(location: ranges[index].location, length: ranges[index].length)
+            guard let selection = AXValueCreate(.cfRange, &cfRange),
+                  AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, selection) == .success,
+                  AXUIElementSetAttributeValue(target.element, kAXSelectedTextAttribute as CFString,
+                                               revised[index] as CFString) == .success else { return false }
+            guard let range = Range(ranges[index], in: expected) else { return false }
+            expected.replaceSubrange(range, with: revised[index])
+            guard let actual = try? stringValue(target.element, kAXValueAttribute),
+                  actual == expected else { return false }
+        }
+        return true
+    }
+
     // MARK: - 事件 tap（只拦截目标应用焦点输入框里的裸回车）
     private func installEventTap() -> Bool {
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
@@ -1568,7 +1607,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyPolishMark()
             return nil
         }
-        if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let draft = EmbeddedDraft(current)
+        if draft.segments.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return Unmanaged.passUnretained(event)
         }
         if processing {
@@ -1607,8 +1647,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pipelineToken = token
         let gate = PipelineGate()
         gate.usesJev = jevEnabled()
-        let jevPrompt = setting(SettingKey.jevPrompt, defaultJevPrompt)
-        let polishPrompt = setting(SettingKey.oaPrompt, defaultOAPrompt)
+        let draft = EmbeddedDraft(current)
+        let objectInstruction = draft.hasObjects ? "\n\n" + draft.instruction : ""
+        let jevPrompt = setting(SettingKey.jevPrompt, defaultJevPrompt) + objectInstruction
+        let polishPrompt = setting(SettingKey.oaPrompt, defaultOAPrompt) + objectInstruction
         gate.roundID = CallLog.shared.begin(original: current, jevPrompt: jevPrompt, polishPrompt: polishPrompt)
         activeRoundID = gate.roundID
         showFieldActivity()
@@ -1665,26 +1707,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settleRound(roundID, outcome: .failed, adjustedText: "", jevNote: jevNote, polishNote: err.description)
             failPipeline(L("OpenAI 失败，未发送：%1$@", err.description))
         case .success(let polished):
+            let draft = EmbeddedDraft(current)
             let trimmed = polished.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let restored = draft.restore(trimmed) else {
+                settleRound(roundID, outcome: .failed, adjustedText: "", jevNote: jevNote,
+                            polishNote: L("模型修改了嵌入对象占位符"))
+                failPipeline(L("模型修改了嵌入对象占位符；原草稿未改动"))
+                return
+            }
             let original = current.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == original {
+            if restored.text == original {
                 settleRound(roundID, outcome: .unchanged, adjustedText: "", jevNote: jevNote, polishNote: L("与原文一致"))
                 polishMark = .success
                 releaseSend(original: current, target: target, status: L("润色结果与原文一致，已发送"))
                 return
             }
-            if writeBack(trimmed, original: current, target: target) {
-                settleRound(roundID, outcome: .adjusted, adjustedText: trimmed, jevNote: jevNote, polishNote: L("已回填"))
-                pendingFill = trimmed
+            let wrote = draft.hasObjects
+                ? writeBackPreservingObjects(restored.segments, draft: draft, target: target)
+                : writeBack(restored.text, original: current, target: target)
+            if wrote {
+                settleRound(roundID, outcome: .adjusted, adjustedText: restored.text, jevNote: jevNote, polishNote: L("已回填"))
+                pendingFill = restored.text
                 pendingTarget = target
                 polishMark = .success
                 updateStatus(L("已润色回填，确认后再次回车发送"))
             } else {
-                settleRound(roundID, outcome: .failed, adjustedText: "", jevNote: jevNote, polishNote: L("写回失败"))
+                let changedDraft: Bool
+                if draft.hasObjects, let latest = try? currentTarget(), sameTarget(latest, target),
+                   let actual = try? stringValue(latest.element, kAXValueAttribute) {
+                    changedDraft = actual != current
+                } else {
+                    changedDraft = false
+                }
+                let failureNote = changedDraft ? L("部分文字可能已写回，请检查草稿") : L("写回失败")
+                settleRound(roundID, outcome: .failed, adjustedText: "", jevNote: jevNote, polishNote: failureNote)
                 pendingFill = nil
                 pendingTarget = nil
                 polishMark = .failure
-                updateStatus(L("写回失败，未发送；再次回车可重试"))
+                updateStatus(changedDraft ? failureNote : L("写回失败，未发送；再次回车可重试"))
             }
             processing = false
             setBusy(false)
@@ -1705,7 +1765,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urlString = setting(SettingKey.jevURL, defaultJevURL)
         let token = setting(SettingKey.jevToken)
         let model = setting(SettingKey.jevModel, defaultJevModel)
+        let draft = EmbeddedDraft(current)
         let instructions = setting(SettingKey.jevPrompt, defaultJevPrompt)
+            + (draft.hasObjects ? "\n\n" + draft.instruction : "")
         func fail(_ message: String) {
             completion(.failure(ProbeError(message)))
         }
@@ -1717,7 +1779,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let body: [String: Any] = [
-            "state": current,
+            "state": draft.modelText,
             "model": model,
             "questions": [
                 "need_polish": [
@@ -1761,7 +1823,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let configuredURL = setting(SettingKey.oaURL)
         let model = setting(SettingKey.oaModel)
         let token = setting(SettingKey.oaToken)
+        let draft = EmbeddedDraft(content)
         let system = setting(SettingKey.oaPrompt, defaultOAPrompt)
+            + (draft.hasObjects ? "\n\n" + draft.instruction : "")
         guard !configuredURL.isEmpty else {
             completion(.failure(ProbeError(L("OpenAI 接口地址未配置"))))
             return
@@ -1772,7 +1836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let extraParameters = setting(SettingKey.oaExtraParameters)
         chatCompletion(urlString: requestURL, token: token, model: model, system: system,
-                       user: content, extraParameters: extraParameters, completion: completion)
+                       user: draft.modelText, extraParameters: extraParameters, completion: completion)
     }
     // OpenAI 兼容 chat/completions：{model?, messages:[system,user]} → choices[0].message.content
     private func chatCompletion(urlString: String, token: String, model: String, system: String, user: String,

@@ -61,7 +61,7 @@ for arch in "${architectures[@]}"; do
   esac
   xcrun --sdk macosx swiftc -swift-version 5 -O -target "$arch-apple-macos12.0" \
     -framework AppKit -framework ApplicationServices -framework Carbon -framework ServiceManagement \
-    Sources/Localization.swift Sources/Settings.swift Sources/main.swift -o "$work_build/Hola-$arch"
+    Sources/Localization.swift Sources/Settings.swift Sources/EmbeddedDraft.swift Sources/main.swift -o "$work_build/Hola-$arch"
   binaries+=("$work_build/Hola-$arch")
 done
 xcrun lipo -create "${binaries[@]}" -output "$APP/Contents/MacOS/Hola"
