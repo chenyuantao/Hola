@@ -1,0 +1,29 @@
+# macOS 系统文件
+.DS_Store
+._*
+
+# 应用构建产物与 Swift / Xcode 缓存
+build/
+.build/
+DerivedData/
+*.dSYM/
+*.xcresult/
+
+# Xcode 本机用户配置
+xcuserdata/
+*.xcuserstate
+
+# Python 辅助脚本缓存与虚拟环境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 本地环境配置（保留配置示例）
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# 本地代码分析缓存
+/.code-review-graph/

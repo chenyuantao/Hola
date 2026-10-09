@@ -1,0 +1,119 @@
+name: Release macOS app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Queue pushes so each commit gets its own version without racing on tags.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select release version
+        id: version
+        run: |
+          git fetch origin --tags
+          python3 scripts/release-version.py >> "$GITHUB_OUTPUT"
+
+      - name: Check for an already published release
+        id: existing
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # A successful rerun must not replace binaries of a published release.
+          if gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release.json"; then
+            draft=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["isDraft"]).lower())' "$RUNNER_TEMP/release.json")
+            if [[ "$draft" == false ]]; then
+              echo 'published=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Import persistent self-signed certificate
+        if: steps.existing.outputs.published != 'true'
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_SHA1: ${{ secrets.MACOS_CERTIFICATE_SHA1 }}
+        run: bash scripts/import-release-certificate.sh
+
+      - name: Build universal macOS app
+        if: steps.existing.outputs.published != 'true'
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          ARCHS: arm64 x86_64
+          SIGN_ID: ${{ secrets.MACOS_CERTIFICATE_SHA1 }}
+          SIGN_KEYCHAIN: ${{ runner.temp }}/hola-release.keychain-db
+        run: |
+          bash build.sh
+          xcrun lipo build/Hola.app/Contents/MacOS/Hola -verify_arch arm64 x86_64
+          codesign --verify --strict build/Hola.app
+          plutil -lint build/Hola.app/Contents/Info.plist
+          actual=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/Hola.app/Contents/Info.plist)
+          test "$actual" = "$APP_VERSION"
+
+      - name: Package app and checksums
+        if: steps.existing.outputs.published != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p build/release
+          ditto -c -k --sequesterRsrc --keepParent build/Hola.app "build/release/Hola-${TAG}-macOS-universal.zip"
+          cd build/release
+          shasum -a 256 ./*.zip > SHA256SUMS.txt
+
+      - name: Tag and publish release
+        if: steps.existing.outputs.published != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+            git tag "$TAG" "$GITHUB_SHA"
+          fi
+          git push origin "refs/tags/$TAG"
+
+          # Upload to a draft first so incomplete assets are never published.
+          if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --title "Hola $TAG" \
+              --generate-notes --notes-file .github/release-notes.md
+          else
+            gh release edit "$TAG" --notes-file .github/release-notes.md
+          fi
+          gh release upload "$TAG" build/release/*.zip build/release/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" --draft=false
+
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/hola-release.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/hola-release.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/hola-release.p12" "$RUNNER_TEMP/hola-release.pem"
+
+      - name: Release summary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          url=$(gh release view "$TAG" --json url --jq .url)
+          echo "### [Hola $TAG]($url)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'macOS 12+ · Apple Silicon / Intel · ZIP + SHA256SUMS.txt' >> "$GITHUB_STEP_SUMMARY"
