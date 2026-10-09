@@ -12,6 +12,28 @@ struct SettingsTests {
         precondition(decoded == values)
         let targets = try JSONDecoder().decode([TargetApplication].self, from: Data(decoded[SettingKey.targets]!.utf8))
         precondition(targets.count == 1 && targets[0].name == apps[0].name && targets[0].bundleID == apps[0].bundleID && targets[0].path == apps[0].path)
+        precondition(targets[0].hijackScope == .all && targets[0].components.isEmpty)
+        let legacyTargets = #"[{"name":"测试 App","bundleID":"test.app","path":"/Applications/Test.app"}]"#
+        let legacyDecoded = try JSONDecoder().decode([TargetApplication].self, from: Data(legacyTargets.utf8))
+        precondition(legacyDecoded == apps)
+        _ = try decodeSettingsFile(encodeSettingsFile([SettingKey.targets: legacyTargets]))
+        let permission = ComponentPermission(id: "composer", label: "输入消息", decision: .deny)
+        let partial = TargetApplication(name: "测试 App", bundleID: "test.app", path: "/Applications/Test.app", hijackScope: .partial, components: [permission])
+        let partialDecoded = try JSONDecoder().decode([TargetApplication].self, from: Data(targetSettingsValue([partial]).utf8))
+        precondition(partialDecoded == [partial])
+        let remembered = applyingComponentDecision(apps, bundleID: "test.app", permission: permission)
+        precondition(remembered[0].components == [permission])
+        let replaced = applyingComponentDecision(remembered, bundleID: "test.app", permission: ComponentPermission(id: "composer", label: "输入消息", decision: .allow))
+        precondition(replaced[0].components == [ComponentPermission(id: "composer", label: "输入消息", decision: .allow)])
+        precondition(applyingComponentDecision(apps, bundleID: "missing", permission: permission) == apps)
+        let field = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "", value: "hello", ancestorPath: "AXGroup")
+        let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "hello", value: "hello", ancestorPath: "AXGroup")
+        precondition(field == sameField && field.label == "输入消息")
+        let search = makeComponentSignature(role: "AXTextField", subrole: "AXSearchField", identifier: "", title: "", placeholder: "", description: "", value: "", ancestorPath: "")
+        precondition(search.label == "搜索框" && search.id != field.id)
+        let titled = makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXSplitGroup/AXGroup")
+        precondition(titled.label == "说明")
+        precondition(titled.id != makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", ancestorPath: "AXGroup").id)
         let empty = try decodeSettingsFile(encodeSettingsFile([SettingKey.targets: "[]"]))
         precondition(empty[SettingKey.targets] == "[]")
         let legacy = Data(#"{"kind":"happy-talk-settings","version":1,"settings":{"openAIModel":"legacy"}}"#.utf8)
@@ -112,6 +134,10 @@ struct SettingsTests {
             [SettingKey.targets: #"[{"name":"bad","path":"/tmp"}]"#],
             [SettingKey.targets: targetSettingsValue([TargetApplication(name: "bad", bundleID: " ", path: "")])],
             [SettingKey.targets: targetSettingsValue(apps + apps)],
+            [SettingKey.targets: #"[{"name":"A","bundleID":"a","path":"/A.app","hijackScope":"nope"}]"#],
+            [SettingKey.targets: #"[{"name":"A","bundleID":"a","path":"/A.app","components":[{"id":"","label":"字段","decision":"allow"}]}]"#],
+            [SettingKey.targets: #"[{"name":"A","bundleID":"a","path":"/A.app","components":[{"id":"a","label":"字段","decision":"allow"},{"id":"a","label":"字段","decision":"deny"}]}]"#],
+            [SettingKey.targets: #"[{"name":"A","bundleID":"a","path":"/A.app","components":[{"id":"a","label":"字段","decision":"maybe"}]}]"#],
             [LanguagePreference.key: "fr"],
             [SettingKey.oaExtraParameters: "[1,2]"],
             [SettingKey.oaExtraParameters: #"{"model":"override"}"#],

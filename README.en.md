@@ -74,7 +74,7 @@ From the project directory, build and restart the app in one step:
 bash scripts/build-and-restart.sh
 ```
 
-The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`, showing the Commands tab. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
+The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`. Settings opens on General; Commands is the second tab. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
 
 > The app is called **Hola**, with the Chinese brand name **言好**. After upgrading from the previous app identity, grant permissions to Hola again. On first launch, Hola migrates previous settings and history.
 
@@ -119,6 +119,18 @@ Type → Press Return → Check and polish
 | The input field cannot be read | That Return is blocked and an error is shown |
 | Writing fails or cannot be verified | Nothing is sent automatically; check the actual text in the field before continuing |
 | You use Return with Shift, Command, or another modifier | The original app handles it as usual |
+
+Each target app has an intercept scope. The default is **Intercept all**: Return in any of that app's fields follows the flow above.
+
+With **Intercept some**, the first Return in a field asks beside that field:
+
+| Choice | This Return | Afterwards |
+| --- | --- | --- |
+| Don't intercept | The original app handles it | Return in this field is left alone |
+| Allow | Polishing starts | Later Returns in this field are intercepted |
+| Not now | The original app handles it | Nothing is remembered, so the next Return asks again |
+
+Saved choices appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Save settings before a scope change takes effect.
 
 While processing, a **Polishing** indicator appears near the input field and the menu bar shows progress. A **green dot** indicates success; a **red dot** indicates failure. Open **History…** to inspect originals, revisions, prompts, and processing details.
 

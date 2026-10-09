@@ -177,6 +177,7 @@ final class SettingsController: NSObject {
     private var editors: [String: NSTextView] = [:]
     private var targetRows = NSStackView()
     private var targetApplications: [TargetApplication] = []
+    private var componentChoiceIndex: [ObjectIdentifier: (Int, Int)] = [:]
     private var jevCheckbox: NSButton?
     private var loginCheckbox: NSButton?
     private var languagePicker: NSPopUpButton?
@@ -190,10 +191,13 @@ final class SettingsController: NSObject {
     private var commandTestToken: UUID?
     private var tabView: NSTabView?
 
-    func show(commandsTab: Bool = false) {
+    func show() {
+        let opening = window?.isVisible != true
         if window == nil { window = makeWindow() }
-        if window?.isVisible != true { loadValues() }
-        if commandsTab { tabView?.selectTabViewItem(withIdentifier: "commands") }
+        if opening {
+            loadValues()
+            tabView?.selectTabViewItem(withIdentifier: "general")
+        }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -223,7 +227,7 @@ final class SettingsController: NSObject {
         stack.alignment = .leading
         stack.spacing = 16
         stack.translatesAutoresizingMaskIntoConstraints = false
-        fill(makeHeader(L("目标应用"), L("只在列表中应用的前台输入框处理回车。")), in: stack)
+        fill(makeHeader(L("目标应用"), L("只在列表中的应用里处理回车。每个应用默认全部劫持；改成部分劫持后，每个输入框第一次回车会询问处理方式，并可在这里修改。")), in: stack)
         let drop = ApplicationDropView()
         drop.onDrop = { [weak self] urls in self?.addApplications(urls) }
         fill(drop, in: stack)
@@ -304,6 +308,7 @@ final class SettingsController: NSObject {
         commandTab.label = L("指令配置")
         commandTab.view = makeCommandsView()
         tabs.addTabViewItem(commandTab)
+        tabs.selectTabViewItem(generalTab)
 
         content.addSubview(tabs)
         content.addSubview(line)
@@ -336,8 +341,10 @@ final class SettingsController: NSObject {
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        fill(makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。")), in: stack)
-        fill(makeCommandTest(), in: stack)
+        let test = makeCommandTest()
+        fill(test, in: stack)
+        let header = makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。"))
+        fill(header, in: stack)
         commandRows = NSStackView()
         commandRows.orientation = .vertical
         commandRows.alignment = .leading
@@ -345,14 +352,18 @@ final class SettingsController: NSObject {
         fill(commandRows, in: stack)
         let add = NSButton(title: L("添加指令"), target: self, action: #selector(addCommand))
         fill(add, in: stack)
+        for view in [test, header, commandRows, add] {
+            view.setContentHuggingPriority(.required, for: .vertical)
+        }
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
+        stack.setContentHuggingPriority(.required, for: .vertical)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16)
+            container.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: 16)
         ])
         scroll.documentView = container
         let clip = scroll.contentView
@@ -778,6 +789,15 @@ final class SettingsController: NSObject {
         values[SettingKey.commands] = useForm ? encodeCommands(try currentCommands()) : setting(SettingKey.commands, "[]")
         return values
     }
+    func applySavedComponentDecision(bundleID: String, permission: ComponentPermission) {
+        guard let index = targetApplications.firstIndex(where: { $0.bundleID == bundleID }) else { return }
+        if let existing = targetApplications[index].components.firstIndex(where: { $0.id == permission.id }) {
+            targetApplications[index].components[existing] = permission
+        } else {
+            targetApplications[index].components.append(permission)
+        }
+        if window?.isVisible == true { renderTargets() }
+    }
     private func addApplications(_ urls: [URL]) {
         var rejected: [String] = []
         for url in urls {
@@ -799,23 +819,108 @@ final class SettingsController: NSObject {
         if !rejected.isEmpty { showNotice(L("无法添加应用"), rejected.joined(separator: "、")) }
     }
     private func renderTargets() {
+        componentChoiceIndex.removeAll()
         targetRows.arrangedSubviews.forEach { targetRows.removeArrangedSubview($0); $0.removeFromSuperview() }
         if targetApplications.isEmpty {
             fill(NSTextField(labelWithString: L("尚未添加应用")), in: targetRows)
+            return
         }
         for (index, target) in targetApplications.enumerated() {
-            let icon = NSImageView(image: NSWorkspace.shared.icon(forFile: target.path))
-            icon.imageScaling = .scaleProportionallyUpOrDown
-            icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
-            icon.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            let title = NSTextField(labelWithString: "\(target.name)  ·  \(target.bundleID)")
-            title.lineBreakMode = .byTruncatingMiddle
-            let remove = NSButton(title: L("移除"), target: self, action: #selector(removeApplication(_:)))
-            remove.tag = index
-            let row = NSStackView(views: [icon, title, remove])
+            fill(makeTargetBlock(target, index: index), in: targetRows)
+        }
+    }
+    private func makeTargetBlock(_ target: TargetApplication, index: Int) -> NSView {
+        let icon = NSImageView(image: NSWorkspace.shared.icon(forFile: target.path))
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        let title = NSTextField(labelWithString: "\(target.name)  ·  \(target.bundleID)")
+        title.lineBreakMode = .byTruncatingMiddle
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let scope = NSPopUpButton()
+        scope.controlSize = .small
+        scope.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        scope.addItems(withTitles: [L("全部劫持"), L("部分劫持")])
+        scope.selectItem(at: target.hijackScope == .partial ? 1 : 0)
+        scope.tag = index
+        scope.target = self
+        scope.action = #selector(changeHijackScope(_:))
+        scope.setContentHuggingPriority(.required, for: .horizontal)
+        let remove = NSButton(title: L("移除"), target: self, action: #selector(removeApplication(_:)))
+        remove.tag = index
+        remove.setContentHuggingPriority(.required, for: .horizontal)
+        let header = NSStackView(views: [icon, title, scope, remove])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 8
+        let block = NSStackView()
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 6
+        block.addArrangedSubview(header)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
+        guard target.hijackScope == .partial else { return block }
+        if target.components.isEmpty {
+            let empty = NSTextField(wrappingLabelWithString: L("尚未记录输入框。部分劫持时，在输入框按回车后会询问。"))
+            empty.font = .systemFont(ofSize: 11)
+            empty.textColor = .secondaryLabelColor
+            empty.preferredMaxLayoutWidth = 420
+            block.addArrangedSubview(empty)
+            empty.translatesAutoresizingMaskIntoConstraints = false
+            empty.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
+            return block
+        }
+        let caption = NSTextField(labelWithString: L("组件权限"))
+        caption.font = .systemFont(ofSize: 11)
+        caption.textColor = .secondaryLabelColor
+        block.addArrangedSubview(caption)
+        for (componentIndex, component) in target.components.enumerated() {
+            let name = NSTextField(labelWithString: component.label.isEmpty ? component.id : component.label)
+            name.lineBreakMode = .byTruncatingMiddle
+            name.font = .systemFont(ofSize: 12)
+            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let choice = NSPopUpButton()
+            choice.controlSize = .small
+            choice.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            choice.addItems(withTitles: [L("允许劫持"), L("不劫持"), L("下次再问")])
+            choice.selectItem(at: component.decision == .allow ? 0 : 1)
+            choice.target = self
+            choice.action = #selector(changeComponentDecision(_:))
+            choice.setContentHuggingPriority(.required, for: .horizontal)
+            componentChoiceIndex[ObjectIdentifier(choice)] = (index, componentIndex)
+            let indent = NSView()
+            indent.translatesAutoresizingMaskIntoConstraints = false
+            indent.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            let row = NSStackView(views: [indent, name, choice])
             row.orientation = .horizontal
+            row.alignment = .centerY
             row.spacing = 8
-            fill(row, in: targetRows)
+            block.addArrangedSubview(row)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
+        }
+        return block
+    }
+    @objc private func changeHijackScope(_ sender: NSPopUpButton) {
+        guard targetApplications.indices.contains(sender.tag) else { return }
+        targetApplications[sender.tag].hijackScope = sender.indexOfSelectedItem == 1 ? .partial : .all
+        DispatchQueue.main.async { [weak self] in self?.renderTargets() }
+    }
+    @objc private func changeComponentDecision(_ sender: NSPopUpButton) {
+        guard let (appIndex, componentIndex) = componentChoiceIndex[ObjectIdentifier(sender)],
+              targetApplications.indices.contains(appIndex),
+              targetApplications[appIndex].components.indices.contains(componentIndex) else { return }
+        switch sender.indexOfSelectedItem {
+        case 0:
+            targetApplications[appIndex].components[componentIndex].decision = .allow
+        case 1:
+            targetApplications[appIndex].components[componentIndex].decision = .deny
+        default:
+            targetApplications[appIndex].components.remove(at: componentIndex)
+            DispatchQueue.main.async { [weak self] in self?.renderTargets() }
         }
     }
     @objc private func removeApplication(_ sender: NSButton) {
@@ -1373,6 +1478,110 @@ final class StatusDotView: NSView {
     }
 }
 
+private enum HijackPromptChoice {
+    case deny, allow, dismiss
+}
+
+private struct HijackPromptContext {
+    let bundleID: String
+    let signatureID: String
+    let label: String
+    let target: Target
+}
+
+private final class HijackPromptPanel: NSObject {
+    var onChoose: ((HijackPromptChoice) -> Void)?
+    private let panel: NSPanel
+    private let titleField = NSTextField(labelWithString: "")
+
+    override init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 132),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        super.init()
+        panel.level = .statusBar
+        panel.isFloatingPanel = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let background = NSVisualEffectView()
+        background.material = .popover
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = 10
+        background.layer?.masksToBounds = true
+        titleField.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleField.lineBreakMode = .byTruncatingMiddle
+        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let hint = NSTextField(wrappingLabelWithString: L("选择会记住。放弃则不记住，下次仍会询问。"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 396
+        let deny = NSButton(title: L("不劫持"), target: self, action: #selector(chooseDeny))
+        let allow = NSButton(title: L("允许劫持"), target: self, action: #selector(chooseAllow))
+        let dismiss = NSButton(title: L("放弃"), target: self, action: #selector(chooseDismiss))
+        for button in [deny, allow, dismiss] {
+            button.bezelStyle = .rounded
+            button.controlSize = .regular
+        }
+        let buttons = NSStackView(views: [deny, allow, dismiss])
+        buttons.orientation = .horizontal
+        buttons.distribution = .fillEqually
+        buttons.spacing = 8
+        let stack = NSStackView(views: [titleField, hint, buttons])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: background.topAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
+            stack.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -12),
+            titleField.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            hint.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+        panel.contentView = background
+    }
+
+    func show(title: String, near cocoa: CGRect?) {
+        titleField.stringValue = title
+        let size = NSSize(width: 420, height: 132)
+        let screen = NSScreen.screens.first { screen in
+            guard let cocoa else { return false }
+            return screen.frame.intersects(cocoa)
+        } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: size.width, height: size.height)
+        var origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        if let cocoa {
+            origin.x = cocoa.midX - size.width / 2
+            origin.y = cocoa.maxY + 8
+            if origin.y + size.height > visible.maxY {
+                origin.y = cocoa.minY - size.height - 8
+            }
+        }
+        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() { panel.orderOut(nil) }
+
+    @objc private func chooseDeny() { onChoose?(.deny) }
+    @objc private func chooseAllow() { onChoose?(.allow) }
+    @objc private func chooseDismiss() { onChoose?(.dismiss) }
+}
+
 final class FieldActivityView: NSView {
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
@@ -1429,6 +1638,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingFill: String?   // 上一次回填/确认的内容（回车二次校验的基准）
     private var pendingTarget: Target?
     private var passThroughReturn = false
+    private var hijackPrompt: HijackPromptContext?
+    private var hijackPromptPanel: HijackPromptPanel?
     private var idleImage: NSImage?
     private var spinner: NSProgressIndicator?
     private var badgeOverlay: StatusBadgeOverlay?
@@ -1492,8 +1703,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshHistoryMenu()
         updateStatus(L("未开启"))
         DispatchQueue.main.async { [weak self] in self?.startRunning(interactive: false) }
-        if CommandLine.arguments.contains("--show-commands") {
-            DispatchQueue.main.async { [weak self] in self?.settingsController.show(commandsTab: true) }
+        if CommandLine.arguments.contains("--show-settings") {
+            DispatchQueue.main.async { [weak self] in self?.settingsController.show() }
         }
     }
     func applicationWillTerminate(_ notification: Notification) { stopRunning() }
@@ -1762,6 +1973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeRoundID = nil
         }
         hideFieldActivity()
+        clearHijackPrompt()
         running = false
         processing = false
         pendingFill = nil
@@ -1938,30 +2150,161 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyPolishMark()
             return nil
         }
-        let draft = EmbeddedDraft(current)
-        if draft.segments.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-            return Unmanaged.passUnretained(event)
-        }
         if processing {
             updateStatus(L("处理中，请稍候…"))
             return nil // 正在润色，拦下这次回车
         }
+        let signature = componentSignature(for: target, value: current)
+        if let prompt = hijackPrompt {
+            if prompt.bundleID == bundleID && prompt.signatureID == signature.id {
+                return nil
+            }
+            clearHijackPrompt()
+        }
+        switch hijackDecision(bundleID: bundleID, signatureID: signature.id) {
+        case .some(.deny):
+            return Unmanaged.passUnretained(event)
+        case .none:
+            askHijackPermission(bundleID: bundleID, signature: signature, target: target)
+            return nil
+        case .some(.allow):
+            break
+        }
+        if beginReturnHandling(current: current, target: target, eventWasConsumed: false) {
+            return Unmanaged.passUnretained(event)
+        }
+        return nil
+    }
+
+    private func hijackDecision(bundleID: String, signatureID: String) -> ComponentHijackDecision? {
+        guard let app = configuredTargets().first(where: { $0.bundleID == bundleID }),
+              app.hijackScope == .partial else { return .allow }
+        return app.components.first(where: { $0.id == signatureID })?.decision
+    }
+    private func askHijackPermission(bundleID: String, signature: ComponentSignature, target: Target) {
+        if hijackPrompt?.bundleID == bundleID, hijackPrompt?.signatureID == signature.id { return }
+        hijackPrompt = HijackPromptContext(bundleID: bundleID, signatureID: signature.id, label: signature.label, target: target)
+        let frame = composerFrame(around: target.element).map { cocoaRect(fromAX: $0) }
+        let title = L("是否劫持「%1$@」？", signature.label)
+        updateStatus(L("请选择是否劫持此输入框"))
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.hijackPrompt?.signatureID == signature.id, self.hijackPrompt?.bundleID == bundleID else { return }
+            self.ensureHijackPromptPanel().show(title: title, near: frame)
+        }
+    }
+    private func ensureHijackPromptPanel() -> HijackPromptPanel {
+        if let panel = hijackPromptPanel { return panel }
+        let panel = HijackPromptPanel()
+        panel.onChoose = { [weak self] choice in self?.resolveHijackPrompt(choice) }
+        hijackPromptPanel = panel
+        return panel
+    }
+    private func resolveHijackPrompt(_ choice: HijackPromptChoice) {
+        guard let pending = hijackPrompt else {
+            clearHijackPrompt()
+            return
+        }
+        hijackPrompt = nil
+        hijackPromptPanel?.hide()
+        switch choice {
+        case .dismiss:
+            replayReturnIfFocused(pending.target)
+        case .deny:
+            let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .deny)
+            saveComponentDecision(bundleID: pending.bundleID, permission: permission)
+            settingsController.applySavedComponentDecision(bundleID: pending.bundleID, permission: permission)
+            replayReturnIfFocused(pending.target)
+        case .allow:
+            let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .allow)
+            saveComponentDecision(bundleID: pending.bundleID, permission: permission)
+            settingsController.applySavedComponentDecision(bundleID: pending.bundleID, permission: permission)
+            guard let target = try? currentTarget(), sameTarget(target, pending.target),
+                  let current = try? stringValue(target.element, kAXValueAttribute) else {
+                updateStatus(L("焦点已变，未继续处理"))
+                return
+            }
+            _ = beginReturnHandling(current: current, target: target, eventWasConsumed: true)
+        }
+    }
+    private func clearHijackPrompt() {
+        hijackPrompt = nil
+        hijackPromptPanel?.hide()
+    }
+    private func replayReturnIfFocused(_ expected: Target) {
+        guard let target = try? currentTarget(), sameTarget(target, expected),
+              let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: false) else {
+            updateStatus(L("焦点已变，未继续处理"))
+            return
+        }
+        passThroughReturn = true
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+    // 返回 true 表示这次回车应交给原应用。eventWasConsumed 为 true 时改为补发回车。
+    private func beginReturnHandling(current: String, target: Target, eventWasConsumed: Bool) -> Bool {
+        if processing {
+            updateStatus(L("处理中，请稍候…"))
+            return false
+        }
+        let draft = EmbeddedDraft(current)
+        let idle = draft.segments.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if idle {
+            if eventWasConsumed { replayReturnIfFocused(target) }
+            return !eventWasConsumed
+        }
         if let fill = pendingFill, let previous = pendingTarget,
            sameTarget(target, previous), current == fill {
-            // 二次校验①：与回填内容一致 → 放行发送，丢弃记忆
             pendingFill = nil
             pendingTarget = nil
             updateStatus(L("已确认，发送"))
-            return Unmanaged.passUnretained(event)
+            if eventWasConsumed { replayReturnIfFocused(target) }
+            return !eventWasConsumed
         }
-        // 首次回车，或二次校验②（内容被改过）→ 拦下，异步跑润色。
         processing = true
         pendingFill = nil
         pendingTarget = nil
         setBusy(true)
         updateStatus(L("判断中…"))
         DispatchQueue.main.async { [weak self] in self?.runCommandOrPipeline(current: current, target: target) }
-        return nil
+        return false
+    }
+    private func optionalAXString(_ element: AXUIElement, _ attribute: String) -> String {
+        (try? stringValue(element, attribute)) ?? ""
+    }
+    private func componentSignature(for target: Target, value: String) -> ComponentSignature {
+        makeComponentSignature(
+            role: target.role,
+            subrole: optionalAXString(target.element, kAXSubroleAttribute),
+            identifier: optionalAXString(target.element, kAXIdentifierAttribute),
+            title: optionalAXString(target.element, kAXTitleAttribute),
+            placeholder: optionalAXString(target.element, kAXPlaceholderValueAttribute),
+            description: optionalAXString(target.element, kAXDescriptionAttribute),
+            value: value,
+            ancestorPath: ancestorRolePath(of: target.element)
+        )
+    }
+    private func ancestorRolePath(of element: AXUIElement) -> String {
+        var parts: [String] = []
+        var current = element
+        for _ in 0..<8 {
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parent) == .success,
+                  let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            let parentElement = parent as! AXUIElement
+            let role = optionalAXString(parentElement, kAXRoleAttribute)
+            if role.isEmpty || role == (kAXWindowRole as String) || role == (kAXApplicationRole as String) { break }
+            let ident = stableAncestorIdentifier(optionalAXString(parentElement, kAXIdentifierAttribute))
+            parts.append(ident.isEmpty ? role : "\(role)#\(ident)")
+            current = parentElement
+        }
+        return parts.reversed().joined(separator: "/")
+    }
+    private func stableAncestorIdentifier(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed.count <= 80 ? trimmed : String(trimmed.prefix(80))
     }
 
     private func runCommandOrPipeline(current: String, target: Target) {

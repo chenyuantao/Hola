@@ -146,8 +146,7 @@ func decodeSettingsFile(_ data: Data) throws -> [String: String] {
     if let rawTargets = values[SettingKey.targets] {
         guard let data = rawTargets.data(using: .utf8),
               let targets = try? JSONDecoder().decode([TargetApplication].self, from: data),
-              targets.allSatisfy({ !$0.bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-              Set(targets.map(\.bundleID)).count == targets.count else {
+              validTargetApplications(targets) else {
             throw ProbeError(L("配置文件中的 Apps 列表无效"))
         }
     }
@@ -158,11 +157,134 @@ func decodeSettingsFile(_ data: Data) throws -> [String: String] {
     return values
 }
 
-struct TargetApplication: Codable {
+enum HijackScope: String, Codable {
+    case all
+    case partial
+}
+
+enum ComponentHijackDecision: String, Codable {
+    case allow
+    case deny
+}
+
+struct ComponentPermission: Codable, Equatable {
+    var id: String
+    var label: String
+    var decision: ComponentHijackDecision
+}
+
+struct ComponentSignature: Equatable {
+    let id: String
+    let label: String
+}
+
+struct TargetApplication: Codable, Equatable {
     let name: String
     let bundleID: String
     let path: String
+    var hijackScope: HijackScope
+    var components: [ComponentPermission]
+
+    init(name: String, bundleID: String, path: String, hijackScope: HijackScope = .all, components: [ComponentPermission] = []) {
+        self.name = name
+        self.bundleID = bundleID
+        self.path = path
+        self.hijackScope = hijackScope
+        self.components = components
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, bundleID, path, hijackScope, components
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        bundleID = try container.decode(String.self, forKey: .bundleID)
+        path = try container.decode(String.self, forKey: .path)
+        hijackScope = try container.decodeIfPresent(HijackScope.self, forKey: .hijackScope) ?? .all
+        components = try container.decodeIfPresent([ComponentPermission].self, forKey: .components) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(bundleID, forKey: .bundleID)
+        try container.encode(path, forKey: .path)
+        try container.encode(hijackScope, forKey: .hijackScope)
+        try container.encode(components, forKey: .components)
+    }
 }
+
+private func validTargetApplications(_ targets: [TargetApplication]) -> Bool {
+    let ids = targets.map { $0.bundleID.trimmingCharacters(in: .whitespacesAndNewlines) }
+    guard ids.allSatisfy({ !$0.isEmpty }), Set(ids).count == ids.count else { return false }
+    return targets.allSatisfy { app in
+        let componentIDs = app.components.map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return componentIDs.allSatisfy { !$0.isEmpty } && Set(componentIDs).count == componentIDs.count
+    }
+}
+
+private func stableComponentToken(_ raw: String, limit: Int, dropIfTooLong: Bool) -> String {
+    let flattened = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+    let trimmed = flattened.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    if trimmed.count <= limit { return trimmed }
+    return dropIfTooLong ? "" : String(trimmed.prefix(limit))
+}
+
+func makeComponentSignature(
+    role: String,
+    subrole: String,
+    identifier: String,
+    title: String,
+    placeholder: String,
+    description: String,
+    value: String,
+    ancestorPath: String
+) -> ComponentSignature {
+    let ident = stableComponentToken(identifier, limit: 80, dropIfTooLong: true)
+    let place = stableComponentToken(placeholder, limit: 80, dropIfTooLong: true)
+    let current = stableComponentToken(value, limit: 500, dropIfTooLong: false)
+    let desc = stableComponentToken(description, limit: 80, dropIfTooLong: true)
+    let heading = stableComponentToken(title, limit: 80, dropIfTooLong: true)
+    let stableDescription = desc == current ? "" : desc
+    let stableTitle = heading == current ? "" : heading
+    let path = stableComponentToken(ancestorPath, limit: 240, dropIfTooLong: false)
+    let id = [role, subrole, ident, stableTitle, place, stableDescription, path].joined(separator: "\u{1e}")
+    return ComponentSignature(id: id, label: componentFieldLabel(
+        role: role, subrole: subrole, identifier: ident, title: stableTitle, placeholder: place, description: stableDescription
+    ))
+}
+
+func componentFieldLabel(role: String, subrole: String, identifier: String, title: String, placeholder: String, description: String) -> String {
+    if !description.isEmpty { return description }
+    if !title.isEmpty { return title }
+    if !placeholder.isEmpty { return placeholder }
+    if !identifier.isEmpty { return identifier }
+    if subrole.lowercased().contains("search") { return L("搜索框") }
+    if role == "AXTextArea" { return L("文本区域") }
+    if role == "AXTextField" { return L("文本框") }
+    return role.isEmpty ? L("文本框") : role
+}
+
+func applyingComponentDecision(_ targets: [TargetApplication], bundleID: String, permission: ComponentPermission) -> [TargetApplication] {
+    guard !permission.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let index = targets.firstIndex(where: { $0.bundleID == bundleID }) else { return targets }
+    var updated = targets
+    if let existing = updated[index].components.firstIndex(where: { $0.id == permission.id }) {
+        updated[index].components[existing] = permission
+    } else {
+        updated[index].components.append(permission)
+    }
+    return updated
+}
+
+func saveComponentDecision(bundleID: String, permission: ComponentPermission) {
+    let updated = applyingComponentDecision(configuredTargets(), bundleID: bundleID, permission: permission)
+    setSetting(SettingKey.targets, targetSettingsValue(updated))
+}
+
 func configuredTargets() -> [TargetApplication] {
     guard let data = setting(SettingKey.targets).data(using: .utf8) else { return [] }
     return (try? JSONDecoder().decode([TargetApplication].self, from: data)) ?? []
