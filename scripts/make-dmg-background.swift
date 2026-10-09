@@ -6,8 +6,8 @@ guard CommandLine.arguments.count == 2 else {
     exit(1)
 }
 
-let width = 760
-let height = 560
+let width = 640
+let height = 420
 // Finder uses the PNG's pixel dimensions as window coordinates. A 2x bitmap
 // makes the artwork twice as large and crops its lower half in this window.
 let scale = 1
@@ -27,28 +27,17 @@ guard let bitmap = NSBitmapImageRep(
     exit(1)
 }
 
-func color(_ hex: UInt32) -> NSColor {
+func color(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
     NSColor(calibratedRed: CGFloat((hex >> 16) & 0xff) / 255,
             green: CGFloat((hex >> 8) & 0xff) / 255,
             blue: CGFloat(hex & 0xff) / 255,
-            alpha: 1)
+            alpha: alpha)
 }
 
-func rounded(_ rect: NSRect, radius: CGFloat, fill: NSColor) {
-    fill.setFill()
-    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-}
-
-func label(_ value: String, x: CGFloat, top: CGFloat, size: CGFloat,
-           ink: NSColor, weight: NSFont.Weight = .regular) {
-    let font = NSFont.systemFont(ofSize: size, weight: weight)
-    let attributes: [NSAttributedString.Key: Any] = [
-        .font: font,
-        .foregroundColor: ink
-    ]
-    let measured = (value as NSString).size(withAttributes: attributes)
-    (value as NSString).draw(at: NSPoint(x: x, y: CGFloat(height) - top - measured.height),
-                             withAttributes: attributes)
+// Coordinates below use Finder's top-left origin so they line up with
+// icon_locations in dmg-settings.py.
+func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+    NSPoint(x: x, y: CGFloat(height) - y)
 }
 
 NSGraphicsContext.saveGraphicsState()
@@ -56,46 +45,40 @@ NSGraphicsContext.current = context
 context.imageInterpolation = .high
 context.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
 
-color(0xF4F7F2).setFill()
+color(0xFCFCFC).setFill()
 NSRect(x: 0, y: 0, width: width, height: height).fill()
-rounded(NSRect(x: 0, y: 0, width: width, height: 9), radius: 0, fill: color(0x346B57))
 
-label("Hola · 言好", x: 36, top: 30, size: 28, ink: color(0x245442), weight: .semibold)
-label("拖拽 Hola 到「应用程序」完成安装", x: 36, top: 78, size: 20,
-      ink: color(0x24382F), weight: .medium)
-label("Drag Hola to Applications to install", x: 36, top: 108, size: 15,
-      ink: color(0x60766B))
-
+// Navigation-style arrow between the app (lower left) and Applications
+// (upper right), pointing toward the folder.
+let center = (x: CGFloat(288), y: CGFloat(186))
+let radius: CGFloat = 30
+let angle = CGFloat(50) * .pi / 180
+let outline: [(CGFloat, CGFloat)] = [(0, -1), (0.8, 0.85), (0, 0.42), (-0.8, 0.85)]
 let arrow = NSBezierPath()
-arrow.lineWidth = 5
-arrow.lineCapStyle = .round
+for (index, (dx, dy)) in outline.enumerated() {
+    let rx = dx * cos(angle) - dy * sin(angle)
+    let ry = dx * sin(angle) + dy * cos(angle)
+    let vertex = point(center.x + rx * radius, center.y + ry * radius)
+    index == 0 ? arrow.move(to: vertex) : arrow.line(to: vertex)
+}
+arrow.close()
 arrow.lineJoinStyle = .round
-arrow.move(to: NSPoint(x: 323, y: 110))
-arrow.line(to: NSPoint(x: 430, y: 110))
-arrow.move(to: NSPoint(x: 418, y: 122))
-arrow.line(to: NSPoint(x: 430, y: 110))
-arrow.line(to: NSPoint(x: 418, y: 98))
-color(0x5C977A).setStroke()
-arrow.stroke()
+arrow.lineWidth = 7
 
-rounded(NSRect(x: 26, y: 185, width: 708, height: 230), radius: 16,
-        fill: color(0xE7EFE8))
-label("首次打开 · First launch", x: 48, top: 159, size: 17,
-      ink: color(0x245442), weight: .semibold)
-label("从「应用程序」打开 Hola。如果 macOS 阻止打开，先关闭提示，再前往：",
-      x: 48, top: 190, size: 14, ink: color(0x24382F))
-label("Open Hola from Applications. If macOS blocks it, dismiss the alert and go to:",
-      x: 48, top: 213, size: 12, ink: color(0x60766B))
-label("macOS 13+   系统设置 → 隐私与安全性 → 安全性 → 仍要打开",
-      x: 48, top: 247, size: 14, ink: color(0x24382F), weight: .medium)
-label("macOS 12     系统偏好设置 → 安全性与隐私 → 通用 → 仍要打开",
-      x: 48, top: 277, size: 14, ink: color(0x24382F), weight: .medium)
-label("13+: System Settings → Privacy & Security → Security → Open Anyway",
-      x: 48, top: 310, size: 11, ink: color(0x60766B))
-label("12: System Preferences → Security & Privacy → General → Open Anyway",
-      x: 48, top: 328, size: 11, ink: color(0x60766B))
-label("请先确认下载来源为 Hola 官方 Releases。若看不到按钮，请先尝试打开一次。",
-      x: 48, top: 347, size: 12, ink: color(0x60766B))
+NSGraphicsContext.saveGraphicsState()
+let shadow = NSShadow()
+shadow.shadowColor = color(0x000000, alpha: 0.22)
+shadow.shadowOffset = NSSize(width: 0, height: -4)
+shadow.shadowBlurRadius = 12
+shadow.set()
+NSColor.white.setStroke()
+arrow.stroke()
+NSGraphicsContext.restoreGraphicsState()
+
+NSColor.white.setStroke()
+arrow.stroke()
+NSGradient(starting: color(0x15212C), ending: color(0x4F7088))?
+    .draw(in: arrow, angle: -40)
 
 NSGraphicsContext.restoreGraphicsState()
 guard let png = bitmap.representation(using: .png, properties: [:]) else {

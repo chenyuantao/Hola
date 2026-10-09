@@ -17,7 +17,7 @@
 - 若标签规则限制创建 `v*` 标签，需允许此工作流创建发布标签。
 - DMG 和 ZIP 内的应用使用固定自签证书签名，未做 Apple 公证；首次安装可能被 Gatekeeper 拦截，升级后可能需要重新授权系统权限。
 
-DMG 由 `scripts/package-dmg.sh` 构建，窗口包含应用、指向 `/Applications` 的链接、拖拽箭头，以及 macOS 13+ 和 macOS 12 的首次打开指引。脚本使用固定版本 `dmgbuild==1.6.7` 写入 Finder 布局，首次运行会在 `build/.dmg-venv` 中安装该工具。
+DMG 由 `scripts/package-dmg.sh` 构建，窗口为纯白极简布局：左下是应用，右上是指向 `/Applications` 的链接，中间是指向「应用程序」的导航箭头。脚本使用固定版本 `dmgbuild==1.6.7` 写入 Finder 布局，首次运行会在 `build/.dmg-venv` 中安装该工具。
 
 ## 固定签名证书
 
@@ -38,7 +38,7 @@ GitHub 仓库的 Actions Secrets 必须配置：
 ## 本地验证构建
 
 ```bash
-SIGN_ID='Hola Local' ARCHS='arm64 x86_64' APP_VERSION=1.0.1 \
+SIGN_ID='Hola Local' BUILD_CHANNEL=release ARCHS='arm64 x86_64' APP_VERSION=1.0.1 \
   APP_PATH="$PWD/build/release-check/Hola.app" bash build.sh
 xcrun lipo build/release-check/Hola.app/Contents/MacOS/Hola -verify_arch arm64 x86_64
 codesign --verify --strict build/release-check/Hola.app
