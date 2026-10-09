@@ -13,7 +13,6 @@
 
 ## 仓库要求
 
-- 必须托管或同步到 GitHub；仅推送到 `git.woa.com` 不会运行 GitHub Actions。
 - 启用 GitHub Actions，并允许工作流申请 `contents: write` 权限。发布使用内置 `GITHUB_TOKEN`，无需额外 PAT；签名需要下方三个 Secrets。
 - 若标签规则限制创建 `v*` 标签，需允许此工作流创建发布标签。
 - DMG 和 ZIP 内的应用使用固定自签证书签名，未做 Apple 公证；首次安装可能被 Gatekeeper 拦截，升级后可能需要重新授权系统权限。
