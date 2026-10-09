@@ -1568,6 +1568,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyPolishMark()
             return nil
         }
+        if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return Unmanaged.passUnretained(event)
+        }
         if processing {
             updateStatus(L("处理中，请稍候…"))
             return nil // 正在润色，拦下这次回车
