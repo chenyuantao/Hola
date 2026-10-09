@@ -79,9 +79,10 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           mkdir -p build/release
+          bash scripts/package-dmg.sh build/Hola.app "build/release/Hola-${TAG}-macOS-universal.dmg"
           ditto -c -k --sequesterRsrc --keepParent build/Hola.app "build/release/Hola-${TAG}-macOS-universal.zip"
           cd build/release
-          shasum -a 256 ./*.zip > SHA256SUMS.txt
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS.txt
 
       - name: Tag and publish release
         if: steps.existing.outputs.published != 'true'
@@ -100,7 +101,7 @@ jobs:
           else
             gh release edit "$TAG" --notes-file .github/release-notes.md
           fi
-          gh release upload "$TAG" build/release/*.zip build/release/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" build/release/*.dmg build/release/*.zip build/release/SHA256SUMS.txt --clobber
           gh release edit "$TAG" --draft=false
 
       - name: Remove temporary signing keychain
@@ -117,4 +118,4 @@ jobs:
         run: |
           url=$(gh release view "$TAG" --json url --jq .url)
           echo "### [Hola $TAG]($url)" >> "$GITHUB_STEP_SUMMARY"
-          echo 'macOS 12+ · Apple Silicon / Intel · ZIP + SHA256SUMS.txt' >> "$GITHUB_STEP_SUMMARY"
+          echo 'macOS 12+ · Apple Silicon / Intel · DMG + ZIP + SHA256SUMS.txt' >> "$GITHUB_STEP_SUMMARY"

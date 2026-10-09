@@ -4,7 +4,7 @@
 
 1. 读取 `Info.plist` 基础版本和仓库已有的 `vX.Y.Z` 标签，取较大版本并递增 patch。当前基础版本 `1.0` 的首次发布为 `v1.0.1`。
 2. 在 macOS runner 上编译 arm64 和 x86_64，合并为 Universal Binary，给应用包写入新版本并使用 长期保存的同一张自签证书签名，无需 Apple 开发者账户。
-3. 验证架构、签名和版本，生成 `Hola-vX.Y.Z-macOS-universal.zip` 与 `SHA256SUMS.txt`。
+3. 验证架构、签名和版本，生成带拖拽安装窗口的 `Hola-vX.Y.Z-macOS-universal.dmg`、备用 ZIP 与 `SHA256SUMS.txt`。
 4. 给触发推送的提交打标签，创建草稿 Release，上传完整附件后正式发布，并自动生成变更记录。
 
 版本以 Git 标签和发布包中的 `CFBundleShortVersionString` / `CFBundleVersion` 为准，不回写 main 的 `Info.plist`，因此无需机器人绕过 main 分支保护，也不会产生版本提交触发循环。要调整主版本或次版本，可以修改 `Info.plist` 中的基础版本；例如设为 `2.0.0` 后，下次发布 `2.0.1`。
@@ -16,7 +16,9 @@
 - 必须托管或同步到 GitHub；仅推送到 `git.woa.com` 不会运行 GitHub Actions。
 - 启用 GitHub Actions，并允许工作流申请 `contents: write` 权限。发布使用内置 `GITHUB_TOKEN`，无需额外 PAT；签名需要下方三个 Secrets。
 - 若标签规则限制创建 `v*` 标签，需允许此工作流创建发布标签。
-- ZIP 使用固定自签证书签名，未做 Apple 公证；首次安装可能被 Gatekeeper 拦截，升级后可能需要重新授权系统权限。
+- DMG 和 ZIP 内的应用使用固定自签证书签名，未做 Apple 公证；首次安装可能被 Gatekeeper 拦截，升级后可能需要重新授权系统权限。
+
+DMG 由 `scripts/package-dmg.sh` 构建，窗口包含应用、指向 `/Applications` 的链接、拖拽箭头，以及 macOS 13+ 和 macOS 12 的首次打开指引。脚本使用固定版本 `dmgbuild==1.6.7` 写入 Finder 布局，首次运行会在 `build/.dmg-venv` 中安装该工具。
 
 ## 固定签名证书
 

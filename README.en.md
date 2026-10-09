@@ -45,8 +45,8 @@ Type as usual and press Return. If the draft needs a change, Hola puts the revis
 
 **Download a release (no developer tools required)**
 
-1. Download `Hola-vVERSION-macOS-universal.zip` from [GitHub Releases](https://github.com/chenyuantao/Hola/releases). It supports both Apple Silicon and Intel Macs.
-2. Unzip it, drag `Hola.app` into Applications, and double-click it.
+1. Download `Hola-vVERSION-macOS-universal.dmg` from [GitHub Releases](https://github.com/chenyuantao/Hola/releases). It supports both Apple Silicon and Intel Macs.
+2. Open the DMG and drag `Hola.app` onto the Applications icon in its Finder window. Then open Hola from Applications and eject the disk image. A ZIP remains available as an alternative.
 3. Releases use **a persistent self-signed certificate and are not notarized by Apple**. If macOS says the developer cannot be verified or Apple cannot check the app for malicious software, dismiss the alert and follow the steps below.
 
 | macOS version | Where to allow opening |

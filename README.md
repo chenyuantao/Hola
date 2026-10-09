@@ -45,8 +45,8 @@
 
 **下载发布版（无需安装开发工具）**
 
-1. 在 [GitHub Releases](https://github.com/chenyuantao/Hola/releases) 下载 `Hola-v版本号-macOS-universal.zip`，适用于 Apple Silicon 和 Intel Mac。
-2. 解压，将 `Hola.app` 拖入「应用程序」，再双击打开。
+1. 在 [GitHub Releases](https://github.com/chenyuantao/Hola/releases) 下载 `Hola-v版本号-macOS-universal.dmg`，适用于 Apple Silicon 和 Intel Mac。
+2. 双击打开 DMG，在出现的安装窗口中将 `Hola.app` 拖到「应用程序」图标上。复制完成后，从「应用程序」打开 Hola，并推出安装磁盘映像。ZIP 仍可作为备用格式下载。
 3. 发布版使用 **固定自签证书签名，未经过 Apple 公证**。如果提示“无法验证开发者”或“Apple 无法检查其是否包含恶意软件”，先关闭提示，再按下表操作：
 
 | 系统版本 | 允许打开的位置 |
