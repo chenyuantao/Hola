@@ -67,7 +67,7 @@ for arch in "${architectures[@]}"; do
   esac
   xcrun --sdk macosx swiftc -swift-version 5 -O -target "$arch-apple-macos12.0" \
     -framework AppKit -framework ApplicationServices -framework Carbon -framework ServiceManagement -framework JavaScriptCore \
-    Sources/Localization.swift Sources/Settings.swift Sources/EmbeddedDraft.swift Sources/CommandFetch.swift Sources/Commands.swift Sources/main.swift -o "$work_build/$APP_NAME-$arch"
+    Sources/Localization.swift Sources/Settings.swift Sources/EmbeddedDraft.swift Sources/CommandFetch.swift Sources/Commands.swift Sources/AppTileFlow.swift Sources/main.swift -o "$work_build/$APP_NAME-$arch"
   binaries+=("$work_build/$APP_NAME-$arch")
 done
 xcrun lipo -create "${binaries[@]}" -output "$APP/Contents/MacOS/$APP_NAME"
