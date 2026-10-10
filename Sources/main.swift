@@ -2434,13 +2434,16 @@ final class FieldBorderView: NSView {
         case .green:
             color = .systemGreen
         case .breathing:
-            color = NSColor.systemYellow.withAlphaComponent(0.28 + 0.72 * breath)
+            // 最暗仍保持明显的黄，避免 1 秒内的请求看起来像没闪。
+            color = NSColor.systemYellow.withAlphaComponent(0.55 + 0.45 * breath)
         }
         color.setStroke()
         let field = bounds.insetBy(dx: strokeInset, dy: strokeInset)
         guard field.width > 1, field.height > 1 else { return }
-        let path = NSBezierPath(rect: field.insetBy(dx: 0.5, dy: 0.5))
-        path.lineWidth = 1
+        // 2pt 描边对齐像素边界；1pt 描边仍用 0.5 的半像素对齐。
+        let pixelInset: CGFloat = tone == .breathing ? 0 : 0.5
+        let path = NSBezierPath(rect: field.insetBy(dx: pixelInset, dy: pixelInset))
+        path.lineWidth = tone == .breathing ? 2 : 1
         path.stroke()
     }
 }
@@ -2670,7 +2673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func ensureOutlineTimer() {
         guard outlineTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tickFieldOutline()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -2682,12 +2685,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         outlineFrameTick += 1
-        if outlineFrameTick % 3 == 0 {
+        if outlineFrameTick % 6 == 0 {
             placeFieldOutline(around: element, tone: tone)
         }
         guard fieldHUD?.isVisible == true, tone == .breathing,
               let border = fieldHUD?.contentView as? FieldBorderView else { return }
-        let wave = sin(Date().timeIntervalSinceReferenceDate * .pi)
+        // 0.2 秒完成一次明暗。请求多在 1 秒内返回，慢周期往往还没闪完就消失了。
+        let wave = sin(Date().timeIntervalSinceReferenceDate * (2 * .pi / 0.2))
         border.breath = CGFloat(0.5 + 0.5 * wave)
         border.needsDisplay = true
     }
