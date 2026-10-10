@@ -162,6 +162,12 @@ enum HijackScope: String, Codable {
     case partial
 }
 
+/// 待命黄色边框：全部劫持，以及部分劫持里还没选「不劫持」的输入框（含尚未决定）。
+func fieldWantsYellowOutline(scope: HijackScope, decision: ComponentHijackDecision?) -> Bool {
+    if scope == .all { return true }
+    return decision != .deny
+}
+
 enum ComponentHijackDecision: String, Codable {
     case allow
     case deny
@@ -185,7 +191,7 @@ struct TargetApplication: Codable, Equatable {
     var hijackScope: HijackScope
     var components: [ComponentPermission]
 
-    init(name: String, bundleID: String, path: String, hijackScope: HijackScope = .all, components: [ComponentPermission] = []) {
+    init(name: String, bundleID: String, path: String, hijackScope: HijackScope = .partial, components: [ComponentPermission] = []) {
         self.name = name
         self.bundleID = bundleID
         self.path = path
@@ -225,6 +231,68 @@ private func validTargetApplications(_ targets: [TargetApplication]) -> Bool {
     }
 }
 
+struct ComponentTreeNode {
+    var role: String
+    var index: Int?
+    var parentRole: String
+    var sameRoleSiblingCount: Int
+}
+
+/// 序号白名单。只有这里的角色会带上兄弟序号，其余角色的序号都是布局槽位。
+let siblingIndexRoles: Set<String> = ["AXTextArea"]
+
+func keepsSiblingIndex(_ role: String) -> Bool {
+    siblingIndexRoles.contains(role)
+}
+
+func componentKindPath(_ nodes: [ComponentTreeNode]) -> String {
+    nodes.map { node in
+        guard let index = node.index, keepsSiblingIndex(node.role) else {
+            return node.role
+        }
+        return "\(node.role)[\(index)]"
+    }.filter { !$0.isEmpty }.joined(separator: "/")
+}
+
+func generalizeStoredComponentID(_ id: String) -> String {
+    let parts = id.components(separatedBy: "\u{1f}")
+    let path = parts[0].split(separator: "/", omittingEmptySubsequences: false).map { segment -> String in
+        let text = String(segment)
+        guard let bracket = text.firstIndex(of: "["), text.hasSuffix("]") else { return text }
+        let role = String(text[..<bracket])
+        return keepsSiblingIndex(role) ? text : role
+    }.joined(separator: "/")
+    if parts.count == 3 {
+        return componentKindID(path: path, subrole: parts[1], placeholder: parts[2])
+    }
+    return path
+}
+
+func normalizingComponentIDs(_ targets: [TargetApplication]) -> [TargetApplication] {
+    targets.map { app in
+        var copy = app
+        var merged: [ComponentPermission] = []
+        for component in app.components {
+            var next = component
+            next.id = generalizeStoredComponentID(component.id)
+            if let index = merged.firstIndex(where: { $0.id == next.id }) {
+                merged[index] = next
+            } else {
+                merged.append(next)
+            }
+        }
+        copy.components = merged
+        return copy
+    }
+}
+
+func componentKindID(path: String, subrole: String, placeholder: String) -> String {
+    let role = subrole.trimmingCharacters(in: .whitespacesAndNewlines)
+    let place = placeholder.trimmingCharacters(in: .whitespacesAndNewlines)
+    if role.isEmpty && place.isEmpty { return path }
+    return [path, role, place].joined(separator: "\u{1f}")
+}
+
 private func stableComponentToken(_ raw: String, limit: Int, dropIfTooLong: Bool) -> String {
     let flattened = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
     let trimmed = flattened.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -250,10 +318,12 @@ func makeComponentSignature(
     let heading = stableComponentToken(title, limit: 80, dropIfTooLong: true)
     let stableDescription = desc == current ? "" : desc
     let stableTitle = heading == current ? "" : heading
-    // 唯一 ID 只用组件在窗口里的树位置。标题、占位符、标识和当前文本都会变，不能拿来对上次的选择。
+    // 种类签名：只有 AXTextArea 保留序号，再加上子角色和占位符。标题、标识和当前草稿会随会话变，不进入签名。
     let position = treePosition.trimmingCharacters(in: .whitespacesAndNewlines)
     let fallback = [role, subrole].filter { !$0.isEmpty }.joined(separator: "#")
-    let id = position.isEmpty ? (fallback.isEmpty ? "AXTextField" : fallback) : position
+    let path = position.isEmpty ? (fallback.isEmpty ? "AXTextField" : fallback) : generalizeStoredComponentID(position)
+    let kindSubrole = position.isEmpty ? "" : subrole.trimmingCharacters(in: .whitespacesAndNewlines)
+    let id = componentKindID(path: path, subrole: kindSubrole, placeholder: place)
     return ComponentSignature(id: id, label: componentFieldLabel(
         role: role, subrole: subrole, identifier: ident, title: stableTitle, placeholder: place, description: stableDescription
     ))
@@ -271,6 +341,12 @@ func componentFieldLabel(role: String, subrole: String, identifier: String, titl
 }
 
 func componentPermissionDisplay(_ permission: ComponentPermission) -> (tree: String, detail: String) {
+    let kind = permission.id.components(separatedBy: "\u{1f}")
+    if kind.count == 3 {
+        let tree = kind[0].replacingOccurrences(of: "/", with: " / ")
+        let detail = permission.label == kind[0] || permission.label.isEmpty ? "" : permission.label
+        return (tree, detail)
+    }
     let parts = permission.id.components(separatedBy: "\u{1e}")
     if !permission.id.contains("\u{1e}") {
         let tree = permission.id.replacingOccurrences(of: "/", with: " / ")
@@ -322,9 +398,22 @@ func saveComponentDecision(bundleID: String, permission: ComponentPermission) {
     setSetting(SettingKey.targets, targetSettingsValue(updated))
 }
 
+func applyingHijackScope(_ targets: [TargetApplication], bundleID: String, scope: HijackScope) -> [TargetApplication] {
+    guard let index = targets.firstIndex(where: { $0.bundleID == bundleID }) else { return targets }
+    var updated = targets
+    updated[index].hijackScope = scope
+    return updated
+}
+
+func saveHijackScope(bundleID: String, scope: HijackScope) {
+    let updated = applyingHijackScope(configuredTargets(), bundleID: bundleID, scope: scope)
+    setSetting(SettingKey.targets, targetSettingsValue(updated))
+}
+
 func configuredTargets() -> [TargetApplication] {
     guard let data = setting(SettingKey.targets).data(using: .utf8) else { return [] }
-    return (try? JSONDecoder().decode([TargetApplication].self, from: data)) ?? []
+    let decoded = (try? JSONDecoder().decode([TargetApplication].self, from: data)) ?? []
+    return normalizingComponentIDs(decoded)
 }
 func targetSettingsValue(_ targets: [TargetApplication]) -> String {
     guard let data = try? JSONEncoder().encode(targets) else { return "[]" }

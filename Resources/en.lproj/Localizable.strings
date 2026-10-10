@@ -63,7 +63,7 @@
 "润色规则提示词" = "Polishing prompt";
 "设置" = "Settings";
 "目标应用" = "Target apps";
-"只在这些应用里处理回车。点选一个应用后，可以修改它的劫持范围。默认全部劫持；改成部分劫持后，每个输入框第一次回车会询问处理方式。" = "Handle Return only in these apps. Select an app to change its intercept scope. Every field is intercepted by default. Intercept some asks the first time you press Return in a field.";
+"只在这些应用里处理回车。点选一个应用后，可以修改它的劫持范围。默认部分劫持：每个输入框第一次回车会询问。还没决定的输入框会显示黄色边框。" = "Handle Return only in these apps. Select an app to change its intercept scope. The default is Intercept some: the first Return in a field asks what to do. A field that has not been decided yet shows a yellow border.";
 "全部劫持" = "Intercept all";
 "部分劫持" = "Intercept some";
 "不劫持" = "Don't intercept";
@@ -73,7 +73,7 @@
 "尚未记录输入框。部分劫持时，在输入框按回车后会询问。" = "No fields recorded yet. Intercept some asks after you press Return in a field.";
 "组件权限" = "Field choices";
 "是否劫持「%1$@」？" = "Intercept \"%1$@\"?";
-"这次回车已拦截，不会发送。不劫持和允许劫持会记住；放弃则下次仍会询问。" = "This Return is intercepted and will not be sent. Don't intercept and Allow are remembered. Not now asks again next time.";
+"这次回车已拦截，不会发送。不劫持和允许劫持会记住这一类输入框；全部劫持会接管该应用的所有输入框，并继续处理这次回车；放弃则下次仍会询问。" = "This Return is intercepted and will not be sent. Don't intercept and Allow remember this kind of field. Intercept all takes over every field in this app and continues with this Return. Not now asks again next time.";
 "请选择是否劫持此输入框" = "Choose whether to intercept this field";
 "焦点已变，未继续处理" = "Focus changed; nothing else was done";
 "搜索框" = "Search field";

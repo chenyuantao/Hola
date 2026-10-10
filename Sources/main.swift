@@ -706,7 +706,7 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         return block
     }
     private func makeTargetControls() -> NSView {
-        let hint = NSTextField(wrappingLabelWithString: L("只在这些应用里处理回车。点选一个应用后，可以修改它的劫持范围。默认全部劫持；改成部分劫持后，每个输入框第一次回车会询问处理方式。"))
+        let hint = NSTextField(wrappingLabelWithString: L("只在这些应用里处理回车。点选一个应用后，可以修改它的劫持范围。默认部分劫持：每个输入框第一次回车会询问。还没决定的输入框会显示黄色边框。"))
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.preferredMaxLayoutWidth = 460
@@ -1586,6 +1586,11 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         }
         if window?.isVisible == true { renderTargets() }
     }
+    func applySavedHijackScope(bundleID: String, scope: HijackScope) {
+        guard let index = targetApplications.firstIndex(where: { $0.bundleID == bundleID }) else { return }
+        targetApplications[index].hijackScope = scope
+        if window?.isVisible == true { renderTargets() }
+    }
     private func addApplications(_ urls: [URL]) {
         var rejected: [String] = []
         let before = targetApplications.count
@@ -2285,7 +2290,7 @@ final class StatusDotView: NSView {
 }
 
 private enum HijackPromptChoice {
-    case deny, allow, dismiss
+    case deny, allow, all, dismiss
 }
 
 private struct HijackPromptContext {
@@ -2306,11 +2311,13 @@ private final class HijackPromptPanel: NSObject {
     private let hintField = NSTextField(wrappingLabelWithString: "")
     private let denyButton = PromptButton(title: "", target: nil, action: nil)
     private let allowButton = PromptButton(title: "", target: nil, action: nil)
+    private let allButton = PromptButton(title: "", target: nil, action: nil)
     private let dismissButton = PromptButton(title: "", target: nil, action: nil)
+    private let contentWidth: CGFloat = 560
 
     override init() {
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 148),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 168),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -2336,18 +2343,20 @@ private final class HijackPromptPanel: NSObject {
         titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         hintField.font = .systemFont(ofSize: 11)
         hintField.textColor = .secondaryLabelColor
-        hintField.preferredMaxLayoutWidth = 396
+        hintField.preferredMaxLayoutWidth = contentWidth - 24
         denyButton.target = self
         denyButton.action = #selector(chooseDeny)
         allowButton.target = self
         allowButton.action = #selector(chooseAllow)
+        allButton.target = self
+        allButton.action = #selector(chooseAll)
         dismissButton.target = self
         dismissButton.action = #selector(chooseDismiss)
-        for button in [denyButton, allowButton, dismissButton] {
+        for button in [denyButton, allowButton, allButton, dismissButton] {
             button.bezelStyle = .rounded
             button.controlSize = .regular
         }
-        let buttons = NSStackView(views: [denyButton, allowButton, dismissButton])
+        let buttons = NSStackView(views: [denyButton, allowButton, allButton, dismissButton])
         buttons.orientation = .horizontal
         buttons.distribution = .fillEqually
         buttons.spacing = 8
@@ -2371,11 +2380,17 @@ private final class HijackPromptPanel: NSObject {
 
     func show(title: String, near cocoa: CGRect?) {
         titleField.stringValue = title
-        hintField.stringValue = L("这次回车已拦截，不会发送。不劫持和允许劫持会记住；放弃则下次仍会询问。")
+        hintField.stringValue = L("这次回车已拦截，不会发送。不劫持和允许劫持会记住这一类输入框；全部劫持会接管该应用的所有输入框，并继续处理这次回车；放弃则下次仍会询问。")
         denyButton.title = L("不劫持")
         allowButton.title = L("允许劫持")
+        allButton.title = L("全部劫持")
         dismissButton.title = L("放弃")
-        let size = NSSize(width: 420, height: 148)
+        var size = NSSize(width: contentWidth, height: 168)
+        panel.setFrame(NSRect(origin: .zero, size: size), display: false)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        if let fitted = panel.contentView?.fittingSize.height, fitted > 40, fitted < 280 {
+            size.height = max(148, ceil(fitted))
+        }
         let screen = NSScreen.screens.first { screen in
             guard let cocoa else { return false }
             return screen.frame.intersects(cocoa)
@@ -2399,6 +2414,7 @@ private final class HijackPromptPanel: NSObject {
 
     @objc private func chooseDeny() { onChoose?(.deny) }
     @objc private func chooseAllow() { onChoose?(.allow) }
+    @objc private func chooseAll() { onChoose?(.all) }
     @objc private func chooseDismiss() { onChoose?(.dismiss) }
 }
 
@@ -2712,12 +2728,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return fallback ?? axFrame(of: element)
     }
-    private func restoreYellowOutlineIfPermitted() {
+    private func restoreYellowOutlineIfNeeded() {
         guard let front = NSWorkspace.shared.frontmostApplication,
               let bundleID = front.bundleIdentifier, targetBundles.contains(bundleID),
               let target = try? currentTarget(),
               let current = try? stringValue(target.element, kAXValueAttribute),
-              fieldPermitsIntercept(bundleID: bundleID, target: target, value: current) else {
+              let decision = focusedFieldOutlineDecision(bundleID: bundleID, target: target, value: current),
+              fieldWantsYellowOutline(scope: decision.scope, decision: decision.choice) else {
             hideFieldOutline()
             return
         }
@@ -2727,13 +2744,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if processing { return }
         if outlineTone == .yellow, Date().timeIntervalSince(outlineCheckedAt) < 0.25 { return }
         outlineCheckedAt = Date()
-        restoreYellowOutlineIfPermitted()
+        restoreYellowOutlineIfNeeded()
     }
-    private func fieldPermitsIntercept(bundleID: String, target: Target, value: String) -> Bool {
-        guard let app = configuredTargets().first(where: { $0.bundleID == bundleID }) else { return false }
-        if app.hijackScope == .all { return true }
+    private func focusedFieldOutlineDecision(bundleID: String, target: Target, value: String) -> (scope: HijackScope, choice: ComponentHijackDecision?)? {
+        guard let app = configuredTargets().first(where: { $0.bundleID == bundleID }) else { return nil }
+        if app.hijackScope == .all { return (.all, nil) }
         let signature = componentSignature(for: target, value: value)
-        return app.components.first(where: { $0.id == signature.id })?.decision == .allow
+        return (.partial, app.components.first(where: { $0.id == signature.id })?.decision)
     }
     // 焦点有时只是光标或较小区域。向父级查找输入区域，用于显示处理提示。
     private func composerFrame(around element: AXUIElement) -> CGRect? {
@@ -3096,6 +3113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatus(L("请选择是否劫持此输入框"))
         DispatchQueue.main.async { [weak self] in
             guard let self, self.hijackPrompt?.signatureID == signature.id, self.hijackPrompt?.bundleID == bundleID else { return }
+            self.showFieldOutline(.yellow, around: target.element)
             self.ensureHijackPromptPanel().show(title: title, near: frame)
         }
     }
@@ -3120,18 +3138,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .deny)
             saveComponentDecision(bundleID: pending.bundleID, permission: permission)
             settingsController.applySavedComponentDecision(bundleID: pending.bundleID, permission: permission)
+            hideFieldOutline()
             restoreRunningStatus()
         case .allow:
             let permission = ComponentPermission(id: pending.signatureID, label: pending.label, decision: .allow)
             saveComponentDecision(bundleID: pending.bundleID, permission: permission)
             settingsController.applySavedComponentDecision(bundleID: pending.bundleID, permission: permission)
-            guard let target = try? currentTarget(), sameTarget(target, pending.target),
-                  let current = try? stringValue(target.element, kAXValueAttribute) else {
-                updateStatus(L("焦点已变，未继续处理"))
-                return
-            }
-            _ = beginReturnHandling(current: current, target: target, eventWasConsumed: true)
+            continuePendingReturn(pending)
+        case .all:
+            saveHijackScope(bundleID: pending.bundleID, scope: .all)
+            settingsController.applySavedHijackScope(bundleID: pending.bundleID, scope: .all)
+            continuePendingReturn(pending)
         }
+    }
+    private func continuePendingReturn(_ pending: HijackPromptContext) {
+        guard let target = try? currentTarget(), sameTarget(target, pending.target),
+              let current = try? stringValue(target.element, kAXValueAttribute) else {
+            updateStatus(L("焦点已变，未继续处理"))
+            return
+        }
+        _ = beginReturnHandling(current: current, target: target, eventWasConsumed: true)
     }
     private func clearHijackPrompt() {
         let wasAsking = hijackPrompt != nil
@@ -3201,22 +3227,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             treePosition: componentTreePosition(of: target.element)
         )
     }
-    /// 从输入框走到窗口为止，每一层记成「角色[在父节点中的序号]」。窗口本身不计入。
+    /// 从输入框走到窗口为止。序号只留给白名单里的角色，剩下的路径再交给种类签名。
     private func componentTreePosition(of element: AXUIElement) -> String {
-        var parts: [String] = []
+        var nodes: [ComponentTreeNode] = []
         var current = element
         for _ in 0..<16 {
             let role = optionalAXString(current, kAXRoleAttribute)
             if role.isEmpty || role == (kAXWindowRole as String) || role == (kAXApplicationRole as String) { break }
-            if let index = siblingIndex(of: current) {
-                parts.append("\(role)[\(index)]")
-            } else {
-                parts.append(role)
-            }
-            guard let parent = axParent(current) else { break }
+            let parent = axParent(current)
+            let parentRole = parent.map { optionalAXString($0, kAXRoleAttribute) } ?? ""
+            let index = parent.flatMap { siblingIndex(of: current, parent: $0) }
+            let sameRole = parent.map { sameRoleSiblingCount(parent: $0, role: role) } ?? 1
+            nodes.append(ComponentTreeNode(role: role, index: index, parentRole: parentRole, sameRoleSiblingCount: sameRole))
+            guard let parent else { break }
             current = parent
         }
-        return parts.reversed().joined(separator: "/")
+        return componentKindPath(nodes.reversed())
     }
     private func axParent(_ element: AXUIElement) -> AXUIElement? {
         var parent: CFTypeRef?
@@ -3224,23 +3250,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { return nil }
         return (parent as! AXUIElement)
     }
-    private func siblingIndex(of element: AXUIElement) -> Int? {
-        guard let parent = axParent(element) else { return nil }
+    private func axChildren(_ parent: AXUIElement) -> [AXUIElement]? {
         var childrenRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(parent, kAXChildrenAttribute as CFString, &childrenRef) == .success,
               let childrenRef else { return nil }
-        let children: [AXUIElement]
-        if let list = childrenRef as? [AXUIElement] {
-            children = list
-        } else if let list = childrenRef as? [AnyObject] {
-            children = list.compactMap { item in
+        if let list = childrenRef as? [AXUIElement] { return list }
+        if let list = childrenRef as? [AnyObject] {
+            return list.compactMap { item in
                 guard CFGetTypeID(item as CFTypeRef) == AXUIElementGetTypeID() else { return nil }
                 return (item as! AXUIElement)
             }
-        } else {
-            return nil
         }
-        return children.firstIndex { CFEqual($0, element) }
+        return nil
+    }
+    private func siblingIndex(of element: AXUIElement, parent: AXUIElement) -> Int? {
+        axChildren(parent)?.firstIndex { CFEqual($0, element) }
+    }
+    private func sameRoleSiblingCount(parent: AXUIElement, role: String) -> Int {
+        guard let children = axChildren(parent) else { return 1 }
+        let count = children.filter { optionalAXString($0, kAXRoleAttribute) == role }.count
+        return max(count, 1)
     }
 
     private func runCommandOrPipeline(current: String, target: Target) {
@@ -3287,7 +3316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.processing = false
                 self.setBusy(false)
-                self.restoreYellowOutlineIfPermitted()
+                self.restoreYellowOutlineIfNeeded()
                 self.updateStatus(L("指令已拦截回车"))
             }
         }
@@ -3405,7 +3434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pendingTarget = nil
                 polishMark = .failure
                 updateStatus(changedDraft ? failureNote : L("写回失败，未发送；再次回车可重试"))
-                restoreYellowOutlineIfPermitted()
+                restoreYellowOutlineIfNeeded()
             }
             processing = false
             setBusy(false)
@@ -3419,7 +3448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         polishMark = .failure
         setBusy(false)
         updateStatus(message)
-        restoreYellowOutlineIfPermitted()
+        restoreYellowOutlineIfNeeded()
     }
 }
 

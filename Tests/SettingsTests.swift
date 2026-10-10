@@ -12,10 +12,11 @@ struct SettingsTests {
         precondition(decoded == values)
         let targets = try JSONDecoder().decode([TargetApplication].self, from: Data(decoded[SettingKey.targets]!.utf8))
         precondition(targets.count == 1 && targets[0].name == apps[0].name && targets[0].bundleID == apps[0].bundleID && targets[0].path == apps[0].path)
-        precondition(targets[0].hijackScope == .all && targets[0].components.isEmpty)
+        precondition(targets[0].hijackScope == .partial && targets[0].components.isEmpty)
         let legacyTargets = #"[{"name":"测试 App","bundleID":"test.app","path":"/Applications/Test.app"}]"#
         let legacyDecoded = try JSONDecoder().decode([TargetApplication].self, from: Data(legacyTargets.utf8))
-        precondition(legacyDecoded == apps)
+        let legacyExpected = [TargetApplication(name: "测试 App", bundleID: "test.app", path: "/Applications/Test.app", hijackScope: .all)]
+        precondition(legacyDecoded == legacyExpected)
         _ = try decodeSettingsFile(encodeSettingsFile([SettingKey.targets: legacyTargets]))
         let permission = ComponentPermission(id: "composer", label: "输入消息", decision: .deny)
         let partial = TargetApplication(name: "测试 App", bundleID: "test.app", path: "/Applications/Test.app", hijackScope: .partial, components: [permission])
@@ -26,23 +27,84 @@ struct SettingsTests {
         let replaced = applyingComponentDecision(remembered, bundleID: "test.app", permission: ComponentPermission(id: "composer", label: "输入消息", decision: .allow))
         precondition(replaced[0].components == [ComponentPermission(id: "composer", label: "输入消息", decision: .allow)])
         precondition(applyingComponentDecision(apps, bundleID: "missing", permission: permission) == apps)
+        let widened = applyingHijackScope(apps, bundleID: "test.app", scope: .all)
+        precondition(widened[0].hijackScope == .all && widened[0].components == apps[0].components)
+        precondition(applyingHijackScope(apps, bundleID: "missing", scope: .all) == apps)
+        precondition(fieldWantsYellowOutline(scope: .partial, decision: nil))
+        precondition(fieldWantsYellowOutline(scope: .partial, decision: .allow))
+        precondition(!fieldWantsYellowOutline(scope: .partial, decision: .deny))
+        precondition(fieldWantsYellowOutline(scope: .all, decision: nil))
+        precondition(fieldWantsYellowOutline(scope: .all, decision: .deny))
         let position = "AXGroup[0]/AXTextArea[0]"
         let field = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "", value: "hello", treePosition: position)
-        let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "session-id", title: "别的标题", placeholder: "别的占位", description: "hello", value: "hello", treePosition: position)
-        precondition(field.id == sameField.id && field.id == position && field.label == "输入消息")
+        let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "session-id", title: "别的标题", placeholder: "输入消息", description: "hello", value: "hello", treePosition: position)
+        precondition(field.id == sameField.id && field.id == componentKindID(path: "AXGroup/AXTextArea[0]", subrole: "", placeholder: "输入消息") && field.label == "输入消息")
         precondition(sameField.label == "别的标题")
+        let otherPlaceholder = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "别的占位", description: "", value: "hello", treePosition: position)
+        precondition(otherPlaceholder.id != field.id)
         let search = makeComponentSignature(role: "AXTextField", subrole: "AXSearchField", identifier: "", title: "", placeholder: "", description: "", value: "", treePosition: "AXTextField[0]")
-        precondition(search.label == "搜索框" && search.id == "AXTextField[0]" && search.id != field.id)
+        precondition(search.label == "搜索框" && search.id == componentKindID(path: "AXTextField", subrole: "AXSearchField", placeholder: "") && search.id != field.id)
+        precondition(siblingIndexRoles == Set(["AXTextArea"]))
+        precondition(!keepsSiblingIndex("AXRow"))
+        precondition(!keepsSiblingIndex("AXTextField"))
+        precondition(!keepsSiblingIndex("AXScrollArea"))
+        precondition(!keepsSiblingIndex("AXSplitGroup"))
+        precondition(!keepsSiblingIndex("AXGroup"))
+        precondition(keepsSiblingIndex("AXTextArea"))
+        func chatRow(_ index: Int) -> String {
+            componentKindPath([
+                ComponentTreeNode(role: "AXSplitGroup", index: 0, parentRole: "AXWindow", sameRoleSiblingCount: 1),
+                ComponentTreeNode(role: "AXOutline", index: 0, parentRole: "AXScrollArea", sameRoleSiblingCount: 1),
+                ComponentTreeNode(role: "AXRow", index: index, parentRole: "AXOutline", sameRoleSiblingCount: 12),
+                ComponentTreeNode(role: "AXTextArea", index: 0, parentRole: "AXRow", sameRoleSiblingCount: 1)
+            ])
+        }
+        precondition(chatRow(4) == chatRow(9))
+        precondition(chatRow(4) == "AXSplitGroup/AXOutline/AXRow/AXTextArea[0]")
+        let chat12 = "AXSplitGroup[0]/AXSplitGroup[33]/AXSplitGroup[12]/AXSplitGroup[0]/AXScrollArea[2]/AXTextArea[0]"
+        let chat16 = "AXSplitGroup[0]/AXSplitGroup[33]/AXSplitGroup[16]/AXSplitGroup[0]/AXScrollArea[2]/AXTextArea[0]"
+        let searchField = "AXSplitGroup[0]/AXSplitGroup[33]/AXTextField[1]"
+        precondition(generalizeStoredComponentID(chat12) == generalizeStoredComponentID(chat16))
+        precondition(generalizeStoredComponentID(chat12) == "AXSplitGroup/AXSplitGroup/AXSplitGroup/AXSplitGroup/AXScrollArea/AXTextArea[0]")
+        precondition(generalizeStoredComponentID(searchField) == "AXSplitGroup/AXSplitGroup/AXTextField")
+        precondition(generalizeStoredComponentID(chat12) != generalizeStoredComponentID(searchField))
+        let wecom = TargetApplication(name: "WeCom", bundleID: "com.tencent.WeWorkMac", path: "/Applications/企业微信.app", hijackScope: .partial, components: [
+            ComponentPermission(id: chat12, label: "文本区域", decision: .allow),
+            ComponentPermission(id: searchField, label: "文本框", decision: .deny),
+            ComponentPermission(id: chat16, label: "文本区域", decision: .allow)
+        ])
+        let normalized = normalizingComponentIDs([wecom])
+        precondition(normalized[0].components.count == 2)
+        precondition(normalized[0].components[0].id == generalizeStoredComponentID(chat12) && normalized[0].components[0].decision == .allow)
+        precondition(normalized[0].components[1].id == generalizeStoredComponentID(searchField) && normalized[0].components[1].decision == .deny)
+        let subject = componentKindPath([
+            ComponentTreeNode(role: "AXGroup", index: 0, parentRole: "AXSplitGroup", sameRoleSiblingCount: 1),
+            ComponentTreeNode(role: "AXTextField", index: 0, parentRole: "AXGroup", sameRoleSiblingCount: 2)
+        ])
+        let messageBody = componentKindPath([
+            ComponentTreeNode(role: "AXGroup", index: 0, parentRole: "AXSplitGroup", sameRoleSiblingCount: 1),
+            ComponentTreeNode(role: "AXTextField", index: 1, parentRole: "AXGroup", sameRoleSiblingCount: 2)
+        ])
+        precondition(subject == messageBody)
+        let firstArea = componentKindPath([
+            ComponentTreeNode(role: "AXGroup", index: 0, parentRole: "AXSplitGroup", sameRoleSiblingCount: 1),
+            ComponentTreeNode(role: "AXTextArea", index: 0, parentRole: "AXGroup", sameRoleSiblingCount: 2)
+        ])
+        let secondArea = componentKindPath([
+            ComponentTreeNode(role: "AXGroup", index: 0, parentRole: "AXSplitGroup", sameRoleSiblingCount: 1),
+            ComponentTreeNode(role: "AXTextArea", index: 1, parentRole: "AXGroup", sameRoleSiblingCount: 2)
+        ])
+        precondition(firstArea == "AXGroup/AXTextArea[0]" && secondArea == "AXGroup/AXTextArea[1]" && firstArea != secondArea)
         let bare = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "", description: "", value: "", treePosition: " ")
         precondition(bare.id == "AXTextArea")
         let titled = makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", treePosition: "AXSplitGroup[0]/AXGroup[1]/AXTextField[0]")
         precondition(titled.label == "说明")
         precondition(titled.id != makeComponentSignature(role: "AXTextField", subrole: "", identifier: "id", title: "标题", placeholder: "占位", description: "说明", value: "", treePosition: "AXGroup[0]/AXTextField[0]").id)
         let titledDisplay = componentPermissionDisplay(ComponentPermission(id: titled.id, label: titled.label, decision: .allow))
-        precondition(titledDisplay.tree == "AXSplitGroup[0] / AXGroup[1] / AXTextField[0]")
+        precondition(titledDisplay.tree == "AXSplitGroup / AXGroup / AXTextField")
         precondition(titledDisplay.detail == "说明")
         let searchDisplay = componentPermissionDisplay(ComponentPermission(id: search.id, label: search.label, decision: .deny))
-        precondition(searchDisplay.tree == "AXTextField[0]")
+        precondition(searchDisplay.tree == "AXTextField")
         precondition(searchDisplay.detail == "搜索框")
         let legacyDisplay = componentPermissionDisplay(permission)
         precondition(legacyDisplay.tree == "composer" && legacyDisplay.detail == "输入消息")
@@ -181,7 +243,8 @@ struct SettingsTests {
         precondition(choices.map(\.text) == [" 你好 ", "您好", "你好呀"])
         precondition(choices.map(\.kind) == [.original, .adjusted, .unused])
         try testFetch()
-        print("Passed: settings round trips, extra request body, legacy compatibility, malformed settings rejection, history drafts, fetch.")
+        try testExecute()
+        print("Passed: settings round trips, extra request body, legacy compatibility, malformed settings rejection, history drafts, fetch, execute.")
     }
 
     static func testFetch() throws {
@@ -205,8 +268,8 @@ struct SettingsTests {
             }
         }
         expect("""
-        () => ({ interrupt: true, replacement: [typeof fetch, typeof Headers, typeof Request, typeof Response, typeof AbortController, typeof FormData, typeof URLSearchParams, typeof Blob, typeof __holaFetch].join(" ") })
-        """, "function function function function function function function function undefined")
+        () => ({ interrupt: true, replacement: [typeof fetch, typeof Headers, typeof Request, typeof Response, typeof AbortController, typeof FormData, typeof URLSearchParams, typeof Blob, typeof execute, typeof __holaFetch, typeof __holaExecute].join(" ") })
+        """, "function function function function function function function function function undefined undefined")
         expect("""
         () => {
           const headers = new Headers({ "X-Test": " a " });
@@ -428,6 +491,150 @@ struct SettingsTests {
         precondition(!openAIConfigurationReady(url: "https://api.example.com/v1", token: "sk", model: "", extraParameters: ""))
         precondition(!openAIConfigurationReady(url: "notaurl", token: "sk", model: "gpt", extraParameters: ""))
         precondition(!openAIConfigurationReady(url: "https://api.example.com/v1", token: "sk", model: "gpt", extraParameters: "[]"))
+    }
+
+    static func testExecute() throws {
+        func run(_ script: String, input: String = "#hello", wait: TimeInterval = 3) -> Result<CommandResult, ProbeError> {
+            var output: Result<CommandResult, ProbeError>?
+            var runner: CommandRunner? = CommandRunner(script: script, input: input) { output = $0 }
+            let deadline = Date().addingTimeInterval(wait)
+            while output == nil && Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            withExtendedLifetime(runner) {}
+            runner = nil
+            return output ?? .failure(ProbeError("Test timeout"))
+        }
+        func expect(_ script: String, _ replacement: String, input: String = "#hello", wait: TimeInterval = 3) {
+            switch run(script, input: input, wait: wait) {
+            case .success(let result):
+                precondition(result.interrupt && result.replacement == replacement, "expected \(replacement), got \(String(describing: result.replacement))")
+            case .failure(let error):
+                fatalError(error.description)
+            }
+        }
+        expect("""
+        async () => {
+          const { stdout, stderr } = await execute("printf '%s' hello");
+          return { interrupt: true, replacement: stdout + "|" + stderr };
+        }
+        """, "hello|")
+        expect("""
+        async () => {
+          try {
+            await execute("printf '%s' bad >&2; exit 4");
+            return { interrupt: true, replacement: "no" };
+          } catch (e) {
+            return { interrupt: true, replacement: [String(e.code), e.killed, e.signal || "", e.stderr, e.message.indexOf("Command failed:") === 0].join("|") };
+          }
+        }
+        """, "4|false||bad|true")
+        expect("""
+        async () => {
+          const { stdout } = await execute("printf '%s' \\"$HOLA_MARK\\"", { env: { HOLA_MARK: "ok" } });
+          const home = await execute("printf '%s' \\"${HOME-unset}\\"", { env: { HOLA_MARK: "ok" } });
+          return { interrupt: true, replacement: stdout + "|" + home.stdout };
+        }
+        """, "ok|unset")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hola-exec-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        switch run("""
+        async (input) => {
+          const { stdout } = await execute("pwd", { cwd: input });
+          return { interrupt: true, replacement: stdout };
+        }
+        """, input: dir.path) {
+        case .success(let result):
+            let got = result.replacement ?? ""
+            precondition(result.interrupt && got.contains(dir.lastPathComponent) && got.hasSuffix("\n"), "pwd got \(got)")
+        case .failure(let error):
+            fatalError(error.description)
+        }
+        expect("""
+        async () => {
+          const sh = await execute("printf '%s' \\"$0\\"");
+          const bash = await execute("printf '%s' \\"$0\\"", { shell: "/bin/bash" });
+          return { interrupt: true, replacement: sh.stdout + "|" + bash.stdout };
+        }
+        """, "/bin/sh|/bin/bash")
+        expect("""
+        async () => {
+          const { stdout } = await execute("printf '%s' A", { encoding: "buffer" });
+          return { interrupt: true, replacement: stdout.byteLength + ":" + stdout[0] };
+        }
+        """, "1:65")
+        expect("""
+        async () => {
+          const { stdout } = await execute("printf '%s' A", { encoding: "hex" });
+          return { interrupt: true, replacement: stdout };
+        }
+        """, "41")
+        expect("""
+        async () => {
+          try {
+            await execute("printf '%s' '0123456789'", { maxBuffer: 4 });
+            return { interrupt: true, replacement: "no" };
+          } catch (e) {
+            return { interrupt: true, replacement: [e.code, e.stdout].join(" ") };
+          }
+        }
+        """, "ERR_CHILD_PROCESS_STDIO_MAXBUFFER 0123")
+        expect("""
+        async () => {
+          try {
+            await execute("/bin/sleep 5", { timeout: 200 });
+            return { interrupt: true, replacement: "no" };
+          } catch (e) {
+            return { interrupt: true, replacement: [String(e.code), e.killed, e.signal].join("|") };
+          }
+        }
+        """, "null|true|SIGTERM", wait: 4)
+        expect("""
+        async () => {
+          const controller = new AbortController();
+          const pending = execute("/bin/sleep 5", { signal: controller.signal });
+          controller.abort();
+          try {
+            await pending;
+            return { interrupt: true, replacement: "no" };
+          } catch (e) { return { interrupt: true, replacement: e.name }; }
+        }
+        """, "AbortError")
+        expect("""
+        async () => {
+          const controller = new AbortController();
+          controller.abort();
+          try {
+            await execute("printf '%s' hi", { signal: controller.signal });
+            return { interrupt: true, replacement: "no" };
+          } catch (e) { return { interrupt: true, replacement: e.name }; }
+        }
+        """, "AbortError")
+        expect("""
+        async () => {
+          try {
+            await execute(1);
+            return { interrupt: true, replacement: "no" };
+          } catch (e) { return { interrupt: true, replacement: e.name }; }
+        }
+        """, "TypeError")
+        expect("""
+        async () => {
+          try {
+            await execute("pwd", { cwd: "/no/such/hola/dir" });
+            return { interrupt: true, replacement: "no" };
+          } catch (e) { return { interrupt: true, replacement: e.code + " " + e.syscall }; }
+        }
+        """, "ENOENT uv_chdir")
+        expect("""
+        async () => {
+          try {
+            await execute("printf '%s' hi", { encoding: "utf32" });
+            return { interrupt: true, replacement: "no" };
+          } catch (e) { return { interrupt: true, replacement: e.message }; }
+        }
+        """, "Unknown encoding: utf32")
     }
 }
 

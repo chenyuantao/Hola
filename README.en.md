@@ -120,17 +120,20 @@ Type → Press Return → Check and polish
 | Writing fails or cannot be verified | Nothing is sent automatically; check the actual text in the field before continuing |
 | You use Return with Shift, Command, or another modifier | The original app handles it as usual |
 
-Each target app has an intercept scope. The default is **Intercept all**: Return in any of that app's fields follows the flow above.
+Each target app has an intercept scope. Newly added apps default to **Intercept some**.
 
 With **Intercept some**, the first Return in a field asks beside that field:
 
 | Choice | This Return | Afterwards |
 | --- | --- | --- |
-| Don't intercept | It stays intercepted and is not sent | Later Returns in this field are left alone |
-| Allow | Polishing starts | Later Returns in this field are intercepted |
+| Don't intercept | It stays intercepted and is not sent | Later Returns in this kind of field are left alone |
+| Allow | Polishing starts | Later Returns in this kind of field are intercepted |
+| Intercept all | Polishing starts | The app switches to Intercept all, so every field is intercepted |
 | Not now | It stays intercepted and is not sent | Nothing is remembered, so the next Return asks again |
 
-Saved choices are stored by the field's place in the window's accessibility tree, remain after restart, and appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately.
+A field that has not been decided yet shows a yellow border while you type and while the prompt is open. Choosing Don't intercept removes the border. Fields that are allowed, and every field while the app is set to Intercept all, also show the yellow border.
+
+A choice is remembered for a kind of field, not for one row in a conversation list. The kind is the accessibility path with every index removed except AXTextArea, plus the subrole and placeholder. In one app, conversation composers that share a placeholder share one choice. Titles, the current draft, and identifiers are not part of the match. Choices remain after restart and appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately. Apps already added keep the scope saved for them. Choices saved with the old indexed path do not match the new kind, so those fields ask once more.
 
 While a request is in flight, the input border breathes yellow and the menu bar shows progress. After the revised text is written back, the border turns green until the next Return sends it or another key is pressed. A **green dot** on the menu bar icon indicates success; a **red dot** indicates failure. Open **Logs** in the panel to inspect originals, revisions, prompts, and processing details.
 
