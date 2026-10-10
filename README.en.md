@@ -74,7 +74,7 @@ From the project directory, build and restart the app in one step:
 bash scripts/build-and-restart.sh
 ```
 
-The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`. Clicking the menu bar icon opens the panel directly on General. The sections are General, Jev, Persona, Commands, and History. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
+The script builds and signs first, then quits the running development build and opens and verifies `build/HolaDev.app`. Clicking the menu bar icon opens the panel directly on General. The sections are General, Model, Persona, Commands, and Logs. A failed build leaves the old app running. The installed release `Hola.app` can keep running and is not replaced. On first launch, the development build copies existing settings once; the two versions then store settings separately. macOS requires separate Accessibility and Input Monitoring permissions for `HolaDev.app` because it has its own app ID.
 
 > The app is called **Hola**, with the Chinese brand name **言好**. After upgrading from the previous app identity, grant permissions to Hola again. On first launch, Hola migrates previous settings and history.
 
@@ -94,7 +94,7 @@ Quit and reopen Hola after granting permissions. Click the **Hola icon** in the 
 ### 3. Choose apps and a model
 
 1. Click the menu bar icon and grant Accessibility and Input Monitoring on **General**.
-2. Enter the **API URL, Token, and Model** for your OpenAI-compatible provider. Changes apply immediately. **Enable intercept** stays unavailable until permissions, this configuration, and at least one target app are ready.
+2. On **Model**, enter the **API URL, Token, and Model** for your OpenAI-compatible provider. Changes apply immediately. **Enable intercept** stays unavailable until permissions, this configuration, and at least one target app are ready. Jev is on the same page and is off by default.
 3. Drag one or more `.app` files from Applications into the target apps area.
 4. Turn on **Enable intercept**. The decision prompt and polishing prompt live under **Persona**.
 
@@ -132,7 +132,7 @@ With **Intercept some**, the first Return in a field asks beside that field:
 
 Saved choices are stored by the field's place in the window's accessibility tree, remain after restart, and appear under the app in Settings. You can switch a choice, or select **Ask again** to be prompted next time. Switching back to Intercept all keeps those choices, but every field is intercepted until you change the scope again. Scope changes apply immediately.
 
-While a request is in flight, the input border breathes yellow and the menu bar shows progress. After the revised text is written back, the border turns green until the next Return sends it or another key is pressed. A **green dot** on the menu bar icon indicates success; a **red dot** indicates failure. Open **History** in the panel to inspect originals, revisions, prompts, and processing details.
+While a request is in flight, the input border breathes yellow and the menu bar shows progress. After the revised text is written back, the border turns green until the next Return sends it or another key is pressed. A **green dot** on the menu bar icon indicates success; a **red dot** indicates failure. Open **Logs** in the panel to inspect originals, revisions, prompts, and processing details.
 
 ## Startup settings
 
@@ -224,7 +224,7 @@ Before inserting a revision or forwarding Return, Hola checks the foreground app
 - **Scope**: The draft in the selected app's focused text field. Hola does not collect chat history or read password controls.
 - **Model requests**: Drafts go to your configured polishing service, and also to Jev when its check is enabled.
 - **Local settings**: Settings and API tokens are stored in `UserDefaults`; tokens are not currently stored in Keychain.
-- **History**: The latest 100 records, including drafts, results, and prompts, are stored locally. Clear them from the History window.
+- **History**: The latest 100 records, including drafts, results, and prompts, are stored locally. Clear them from Logs.
 
 <details>
 <summary>Local history file</summary>

@@ -527,10 +527,10 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
 
         let pages: [(String, String, String, Bool, NSView)] = [
             ("general", L("通用"), "slider.horizontal.3", true, makeGeneralView()),
-            ("jev", "Jev", "bolt", false, makeJevView()),
+            ("model", L("模型"), "cpu", true, makeModelView()),
             ("persona", L("人设"), "person", false, makePersonaView()),
             ("commands", L("指令"), "terminal", false, makeCommandsView()),
-            ("history", L("历史记录"), "clock", false, historyContent?() ?? NSView())
+            ("history", L("日志"), "clock", false, historyContent?() ?? NSView())
         ]
         tabButtons = pages.map { id, title, symbol, required, _ in
             let button = PanelTabButton(identifier: id, title: title, symbol: symbol)
@@ -647,7 +647,6 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         stack.alignment = .leading
         stack.spacing = 18
         fill(formRow(L("权限"), makePermissionControls(), top: true, required: true), in: stack)
-        fill(formRow("OpenAI", makeOpenAIControls(), top: true, required: true), in: stack)
         fill(formRow(L("目标应用"), makeTargetControls(), top: true, required: true), in: stack)
         fill(formRow(L("开机启动"), makeLoginControls(), top: true), in: stack)
         let picker = NSPopUpButton()
@@ -752,17 +751,30 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         hint.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
         return block
     }
-    private func makeJevView() -> NSView {
+    private func makeModelView() -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
-        fill(makeHeader("Jev", L("可选。开启后先判断是否需要润色；关闭后每次都调用润色接口。")), in: stack)
+        stack.spacing = 18
+        fill(formRow("OpenAI", makeOpenAIControls(), top: true, required: true), in: stack)
+        fill(formRow("Jev", makeJevControls(), top: true), in: stack)
+        return wrapScroll(stack)
+    }
+    private func makeJevControls() -> NSView {
+        let hint = NSTextField(wrappingLabelWithString: L("可选。开启后先判断是否需要润色；关闭后每次都调用润色接口。"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 460
         let checkbox = NSButton(checkboxWithTitle: L("启用 Jev 判断"), target: self, action: #selector(jevChanged))
         jevCheckbox = checkbox
-        fill(checkbox, in: stack)
-        for spec in jevSpecs { fill(makeField(spec), in: stack) }
-        return wrapScroll(stack)
+        let block = NSStackView()
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 10
+        fill(hint, in: block)
+        block.addArrangedSubview(checkbox)
+        for spec in jevSpecs { fill(makeField(spec), in: block) }
+        return block
     }
     private func makePersonaView() -> NSView {
         let stack = NSStackView()
