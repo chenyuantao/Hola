@@ -201,6 +201,8 @@ Rules match from top to bottom. Drag the handle on the left to change priority. 
 
 Use `fetch` for network requests. It follows the [Fetch standard](https://fetch.spec.whatwg.org/). Scripts can `await fetch(url, init)`. `Headers`, `Request`, `Response`, `AbortController`, `FormData`, `Blob`, and `URLSearchParams` are also available. HTTP 4xx/5xx responses do not reject the promise; check `response.ok`. An invalid URL, a connection failure, or an integrity mismatch rejects with `TypeError`. Aborting through `AbortSignal` rejects with `AbortError` or `TimeoutError`. The whole script, including `fetch`, must finish within 10 seconds; a timeout does not send the draft.
 
+Use `execute` to run a local command. It follows the Promise form of Node.js [`child_process.exec`](https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback). `await execute(command, options?)` resolves to `{ stdout, stderr }`. The command runs as the current user through a shell, `/bin/sh -c` by default. `options` may include `cwd`, `env`, `encoding`, `shell`, `timeout`, `maxBuffer`, `killSignal`, and `signal`. `encoding` defaults to `utf8`; `"buffer"` makes `stdout` / `stderr` a `Uint8Array`. `env` is the complete environment table. A non-zero exit, a timeout, or output past `maxBuffer` (1 MiB by default) rejects the promise. The error has `code`, `killed`, `signal`, `cmd`, `stdout`, and `stderr`. Aborting through `signal` rejects with `AbortError`. The whole script, including `execute`, must finish within 10 seconds; a timeout does not send the draft.
+
 ```javascript
 async (input) => {
   const response = await fetch("https://example.com/rewrite", {
@@ -211,6 +213,13 @@ async (input) => {
   if (!response.ok) throw new Error(String(response.status));
   const data = await response.json();
   return { interrupt: true, replacement: data.text };
+}
+```
+
+```javascript
+async (input) => {
+  const { stdout } = await execute("printf %s " + JSON.stringify(input));
+  return { interrupt: true, replacement: stdout };
 }
 ```
 

@@ -832,7 +832,7 @@ final class SettingsController: NSObject, NSTabViewDelegate, NSTextFieldDelegate
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let header = makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。"))
+        let header = makeHeader(L("指令配置"), L("按顺序匹配正则。脚本是一个函数，例如 async (input) => { … }，以原始 input 调用，返回 { interrupt: boolean, replacement?: string } 或其 Promise。interrupt 为 true 时拦截回车并按需替换草稿；false 时继续正常流程。发起网络请求使用 fetch，用法与 Fetch 标准一致。执行本机命令使用 execute(command, options?)，用法与 Node.js child_process.exec 的 Promise 形式一致，成功时返回 { stdout, stderr }。排在前面的规则优先匹配，拖动左侧手柄可调整顺序。"))
         fill(header, in: stack)
         commandRows = NSStackView()
         commandRows.orientation = .vertical
@@ -2980,7 +2980,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let isReturn = keyCode == Int64(kVK_Return) || keyCode == Int64(kVK_ANSI_KeypadEnter)
         if !isReturn {
-            noteTyping()
+            // 快捷键不绘制黄色边框，只跟没有辅助键的普通输入。
+            if keyDrawsYellowOutline(
+                shift: event.flags.contains(.maskShift),
+                control: event.flags.contains(.maskControl),
+                option: event.flags.contains(.maskAlternate),
+                command: event.flags.contains(.maskCommand)
+            ) {
+                noteTyping()
+            }
             return Unmanaged.passUnretained(event)
         }
         let modifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]

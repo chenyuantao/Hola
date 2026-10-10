@@ -35,6 +35,12 @@ struct SettingsTests {
         precondition(!fieldWantsYellowOutline(scope: .partial, decision: .deny))
         precondition(fieldWantsYellowOutline(scope: .all, decision: nil))
         precondition(fieldWantsYellowOutline(scope: .all, decision: .deny))
+        precondition(keyDrawsYellowOutline(shift: false, control: false, option: false, command: false))
+        precondition(!keyDrawsYellowOutline(shift: true, control: false, option: false, command: false))
+        precondition(!keyDrawsYellowOutline(shift: false, control: true, option: false, command: false))
+        precondition(!keyDrawsYellowOutline(shift: false, control: false, option: true, command: false))
+        precondition(!keyDrawsYellowOutline(shift: false, control: false, option: false, command: true))
+        precondition(!keyDrawsYellowOutline(shift: true, control: true, option: true, command: true))
         let position = "AXGroup[0]/AXTextArea[0]"
         let field = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "", title: "", placeholder: "输入消息", description: "", value: "hello", treePosition: position)
         let sameField = makeComponentSignature(role: "AXTextArea", subrole: "", identifier: "session-id", title: "别的标题", placeholder: "输入消息", description: "hello", value: "hello", treePosition: position)

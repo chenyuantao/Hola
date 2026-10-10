@@ -3,8 +3,10 @@ import Foundation
 import JavaScriptCore
 
 // 指令脚本里的 fetch。JavaScriptCore 没有浏览器网络 API，这里用 URLSession 补上 Fetch 标准的脚本表面：
-// fetch、Headers、Request、Response、AbortController、FormData、Blob、URLSearchParams。
+// fetch、Headers、Request、Response、AbortController、AbortSignal、FormData、Blob、File、URLSearchParams、DOMException、ReadableStream。
 // 这是本地特权脚本，不套用浏览器的 CORS 过滤；redirect: "manual" 返回 3xx 本身，方便读取 Location。
+// 调用约定、错误类型和示例写在 Commands.swift 的「指令脚本宿主扩展」注释里，供写指令脚本时直接对照。
+// execute 在 CommandExecute.swift，对齐 Node.js child_process.exec 的 Promise 形式。
 final class CommandFetchBridge: NSObject, URLSessionTaskDelegate {
     private let queue: DispatchQueue
     private let lock = NSLock()

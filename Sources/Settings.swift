@@ -168,6 +168,11 @@ func fieldWantsYellowOutline(scope: HijackScope, decision: ComponentHijackDecisi
     return decision != .deny
 }
 
+/// 黄色边框只跟普通按键。Shift / Control / Option / Command 任一按下都不绘制。
+func keyDrawsYellowOutline(shift: Bool, control: Bool, option: Bool, command: Bool) -> Bool {
+    !shift && !control && !option && !command
+}
+
 enum ComponentHijackDecision: String, Codable {
     case allow
     case deny

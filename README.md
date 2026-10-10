@@ -202,6 +202,8 @@ async (input) => {
 
 发起网络请求使用 `fetch`，用法与 [Fetch 标准](https://fetch.spec.whatwg.org/) 一致。脚本里可以直接 `await fetch(url, init)`，同时提供 `Headers`、`Request`、`Response`、`AbortController`、`FormData`、`Blob` 和 `URLSearchParams`。HTTP 4xx/5xx 不会让 Promise 失败，先看 `response.ok`；URL 不合法、连不上或完整性校验失败会以 `TypeError` 拒绝，用 `AbortSignal` 中止时以 `AbortError` 或 `TimeoutError` 拒绝。整段脚本（包括 `fetch`）需要在 10 秒内返回，超时不会发送。
 
+执行本机命令使用 `execute`，用法与 Node.js [`child_process.exec`](https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback) 的 Promise 形式一致。`await execute(command, options?)` 成功时得到 `{ stdout, stderr }`。`command` 在当前用户权限下交给 shell，默认 `/bin/sh -c`。`options` 可包含 `cwd`、`env`、`encoding`、`shell`、`timeout`、`maxBuffer`、`killSignal`、`signal`。`encoding` 默认 `utf8`，设为 `"buffer"` 时 `stdout` / `stderr` 是 `Uint8Array`。`env` 是完整的环境变量表。非 0 退出、超时或输出超过 `maxBuffer`（默认 1 MiB）会拒绝 Promise，错误对象上有 `code`、`killed`、`signal`、`cmd`、`stdout`、`stderr`。`signal` 中止时以 `AbortError` 拒绝。整段脚本（包括 `execute`）需要在 10 秒内返回，超时不会发送。
+
 ```javascript
 async (input) => {
   const response = await fetch("https://example.com/rewrite", {
@@ -212,6 +214,13 @@ async (input) => {
   if (!response.ok) throw new Error(String(response.status));
   const data = await response.json();
   return { interrupt: true, replacement: data.text };
+}
+```
+
+```javascript
+async (input) => {
+  const { stdout } = await execute("printf %s " + JSON.stringify(input));
+  return { interrupt: true, replacement: stdout };
 }
 ```
 
